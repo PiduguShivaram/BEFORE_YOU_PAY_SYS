@@ -62,3 +62,23 @@ def test_cors_origins_empty_string():
         settings = Settings()
         assert settings.cors_origins == ["*"]
         assert isinstance(settings.cors_origins, list)
+
+
+def test_empty_environment_variables_fallback_to_defaults():
+    """Verify empty string env vars (e.g. from blank Vercel env fields) use declared defaults."""
+    env_overrides = {
+        "APP_ENV": "",
+        "APP_PORT": "",
+        "DEBUG": "",
+        "MAX_UPLOAD_SIZE_MB": "",
+        "RAG_DEFAULT_TOP_K": "",
+        "RAG_SIMILARITY_THRESHOLD": "",
+    }
+    with mock.patch.dict(os.environ, env_overrides):
+        settings = Settings(_env_file=None)
+        assert settings.app_env == "development"
+        assert settings.app_port == 8000
+        assert settings.debug is False
+        assert settings.max_upload_size_mb == 25
+        assert settings.rag_default_top_k == 5
+        assert settings.rag_similarity_threshold == 0.30
