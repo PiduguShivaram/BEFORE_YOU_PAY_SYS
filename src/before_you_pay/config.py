@@ -1,9 +1,10 @@
 """Application configuration management using Pydantic Settings."""
 
+import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +24,26 @@ class Settings(BaseSettings):
     app_port: int = 8000
     debug: bool = False
     api_prefix: str = "/api/v1"
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: list[str] | str = Field(default_factory=lambda: ["*"])
+
+    @field_validator("cors_origins", mode="after")
+    @classmethod
+    def assemble_cors_origins(cls, v: list[str] | str) -> list[str]:
+        """Normalize CORS origins from JSON list, comma-separated string, or wildcard."""
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return ["*"]
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            items = [item.strip() for item in s.split(",") if item.strip()]
+            return items if items else ["*"]
+        return list(v)
 
     # Document Ingestion Limits
     max_upload_size_mb: int = 25

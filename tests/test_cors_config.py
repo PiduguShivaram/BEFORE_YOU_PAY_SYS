@@ -1,0 +1,64 @@
+"""Regression test suite for CORS_ORIGINS configuration parsing."""
+
+import os
+from unittest import mock
+
+import pytest
+
+from before_you_pay.config import Settings
+
+
+def test_cors_origins_default():
+    """Verify default CORS origins is ['*'] when unset."""
+    with mock.patch.dict(os.environ, {}, clear=False):
+        if "CORS_ORIGINS" in os.environ:
+            del os.environ["CORS_ORIGINS"]
+        settings = Settings(_env_file=None)
+        assert settings.cors_origins == ["*"]
+        assert isinstance(settings.cors_origins, list)
+
+
+def test_cors_origins_json_array():
+    """Verify JSON array formatted CORS_ORIGINS parses correctly."""
+    with mock.patch.dict(os.environ, {"CORS_ORIGINS": '["https://before-you-pay-sys.vercel.app", "http://localhost:3000"]'}):
+        settings = Settings()
+        assert settings.cors_origins == [
+            "https://before-you-pay-sys.vercel.app",
+            "http://localhost:3000",
+        ]
+        assert isinstance(settings.cors_origins, list)
+
+
+def test_cors_origins_single_url():
+    """Verify single URL string without JSON brackets parses cleanly without error."""
+    with mock.patch.dict(os.environ, {"CORS_ORIGINS": "https://before-you-pay-sys.vercel.app"}):
+        settings = Settings()
+        assert settings.cors_origins == ["https://before-you-pay-sys.vercel.app"]
+        assert isinstance(settings.cors_origins, list)
+
+
+def test_cors_origins_comma_separated():
+    """Verify comma-separated URLs parse cleanly into list."""
+    with mock.patch.dict(os.environ, {"CORS_ORIGINS": "http://localhost:3000, https://before-you-pay-sys.vercel.app"}):
+        settings = Settings()
+        assert settings.cors_origins == [
+            "http://localhost:3000",
+            "https://before-you-pay-sys.vercel.app",
+        ]
+        assert isinstance(settings.cors_origins, list)
+
+
+def test_cors_origins_wildcard_string():
+    """Verify wildcard string '*' parses cleanly into ['*']."""
+    with mock.patch.dict(os.environ, {"CORS_ORIGINS": "*"}):
+        settings = Settings()
+        assert settings.cors_origins == ["*"]
+        assert isinstance(settings.cors_origins, list)
+
+
+def test_cors_origins_empty_string():
+    """Verify empty or whitespace string falls back to ['*']."""
+    with mock.patch.dict(os.environ, {"CORS_ORIGINS": "   "}):
+        settings = Settings()
+        assert settings.cors_origins == ["*"]
+        assert isinstance(settings.cors_origins, list)
