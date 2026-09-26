@@ -2,12 +2,16 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/api",
+      "destination": "/api/index.py?__orig_path__=/api"
+    },
+    {
       "source": "/api/(.*)",
-      "destination": "/api/index.py"
+      "destination": "/api/index.py?__orig_path__=/api/$1"
     },
     {
       "source": "/health",
-      "destination": "/api/index.py"
+      "destination": "/api/index.py?__orig_path__=/health"
     }
   ],
   "functions": {
