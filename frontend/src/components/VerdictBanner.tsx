@@ -16,7 +16,7 @@ import {
   Scan,
 } from "lucide-react";
 import { FinalDecisionSupportResult } from "../lib/types";
-import { formatCurrency } from "../lib/utils";
+import { formatCurrency, formatDifference } from "../lib/utils";
 
 interface VerdictBannerProps {
   result: FinalDecisionSupportResult;
@@ -105,10 +105,25 @@ export const VerdictBanner: React.FC<VerdictBannerProps> = ({ result, onReset })
       ? parseFloat(String(document.discount_amount.normalized_value))
       : null;
 
-  const allChecksPass = validation_checks.length > 0 && validation_checks.every((c) => c.status === "PASS");
+  // Only substantive findings require review (skip INFO notes and ordinary INCONCLUSIVE checks like dates not stated)
+  const substantiveFindings = flags.filter(
+    (f) => f.severity === "WARNING" || f.severity === "CRITICAL"
+  );
+  const primaryFinding = substantiveFindings.length > 0 ? substantiveFindings[0] : (flags.length > 0 ? flags[0] : null);
 
-  // Primary verification finding
-  const primaryFinding = flags.length > 0 ? flags[0] : null;
+  // Check specific quotation reconciliations
+  const subtotalCheck = validation_checks.find((c) => c.check_code === "QUOTATION_SUBTOTAL_CONSISTENCY");
+  const netTotalCheck = validation_checks.find(
+    (c) => c.check_code === "QUOTATION_NET_TOTAL_CONSISTENCY" || c.check_code === "ARITHMETIC_TOTAL_CONSISTENCY"
+  );
+
+  const componentDelta = subtotalCheck?.absolute_delta ?? 0;
+  const isComponentPass = subtotalCheck ? subtotalCheck.status === "PASS" : true;
+
+  const quotedDelta = netTotalCheck?.absolute_delta ?? 0;
+  const isQuotedTotalPass = netTotalCheck ? netTotalCheck.status === "PASS" : true;
+
+  const allSubstantivePass = substantiveFindings.length === 0;
 
   // Unreliable / Unreadable OCR State
   if (isUnreliableOcr || isUnreadableDoc) {
@@ -250,9 +265,9 @@ export const VerdictBanner: React.FC<VerdictBannerProps> = ({ result, onReset })
           {summary.headline}
         </h2>
         <p className="text-xs sm:text-sm text-slate-300 mt-1 leading-relaxed">
-          {allChecksPass
+          {allSubstantivePass
             ? "Deterministic arithmetic verified: Stated components match the quoted net total."
-            : `${flags.length} finding${flags.length > 1 ? "s" : ""} require${flags.length === 1 ? "s" : ""} review before authorizing payment.`}
+            : `${substantiveFindings.length} finding${substantiveFindings.length > 1 ? "s" : ""} require${substantiveFindings.length === 1 ? "s" : ""} review before authorizing payment.`}
         </p>
       </div>
 
@@ -270,10 +285,15 @@ export const VerdictBanner: React.FC<VerdictBannerProps> = ({ result, onReset })
           </div>
 
           <div className="flex items-center gap-2 pt-1 sm:pt-0">
-            {allChecksPass && (
+            {allSubstantivePass ? (
               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                 <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Arithmetic Reconciled</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                <span>Verification Needed</span>
               </span>
             )}
             {paymentStatus && (
@@ -284,70 +304,77 @@ export const VerdictBanner: React.FC<VerdictBannerProps> = ({ result, onReset })
           </div>
         </div>
 
-        {/* 3-Box Financial Breakdown: Subtotal, Offers/Paid, Balance */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 text-xs font-mono">
-          {isQuotation ? (
-            <>
-              <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
-                <span className="text-[10px] text-slate-400 uppercase font-sans font-semibold block">
-                  Stated Subtotal
-                </span>
-                <span className="text-sm sm:text-base font-bold text-slate-100 block mt-0.5">
-                  {formatCurrency(subtotalAmount ?? totalAmount, currency)}
-                </span>
-              </div>
+        {/* Financial Breakdown: Subtotal, Offers/Paid, Reconciliations */}
+        {isQuotation ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 text-xs font-mono">
+            <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
+              <span className="text-[10px] text-slate-400 uppercase font-sans font-semibold block">
+                Stated Subtotal
+              </span>
+              <span className="text-sm sm:text-base font-bold text-slate-100 block mt-0.5">
+                {formatCurrency(subtotalAmount ?? totalAmount, currency)}
+              </span>
+            </div>
 
-              <div className="p-2.5 rounded-xl bg-emerald-950/20 border border-emerald-500/20">
-                <span className="text-[10px] text-emerald-400 uppercase font-sans font-semibold block">
-                  Offers & Discounts
-                </span>
-                <span className="text-sm sm:text-base font-bold text-emerald-300 block mt-0.5">
-                  {discountAmount !== null && discountAmount > 0
-                    ? `−${formatCurrency(discountAmount, currency)}`
-                    : "None"}
-                </span>
-              </div>
+            <div className="p-2.5 rounded-xl bg-emerald-950/20 border border-emerald-500/20">
+              <span className="text-[10px] text-emerald-400 uppercase font-sans font-semibold block">
+                Offers & Discounts
+              </span>
+              <span className="text-sm sm:text-base font-bold text-emerald-300 block mt-0.5">
+                {discountAmount !== null && discountAmount > 0
+                  ? `−${formatCurrency(discountAmount, currency)}`
+                  : "None"}
+              </span>
+            </div>
 
-              <div className="col-span-2 sm:col-span-1 p-2.5 rounded-xl bg-brand-950/20 border border-brand-500/20">
-                <span className="text-[10px] text-brand-300 uppercase font-sans font-semibold block">
-                  Reconciliation Delta
-                </span>
-                <span className="text-sm sm:text-base font-bold text-brand-200 block mt-0.5">
-                  {formatCurrency(0, currency)} (Exact Match)
-                </span>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
-                <span className="text-[10px] text-slate-400 uppercase font-sans font-semibold block">
-                  Stated Total
-                </span>
-                <span className="text-sm sm:text-base font-bold text-slate-100 block mt-0.5">
-                  {formatCurrency(totalAmount, currency)}
-                </span>
-              </div>
+            <div className={`p-2.5 rounded-xl border ${isQuotedTotalPass ? "bg-emerald-950/20 border-emerald-500/20" : "bg-rose-950/20 border-rose-500/30"}`}>
+              <span className={`text-[10px] uppercase font-sans font-semibold block truncate ${isQuotedTotalPass ? "text-emerald-400" : "text-rose-400"}`}>
+                Quoted Total Reconciliation
+              </span>
+              <span className={`text-xs sm:text-sm font-bold block mt-0.5 ${isQuotedTotalPass ? "text-emerald-300" : "text-rose-300 font-extrabold"}`}>
+                {isQuotedTotalPass ? "Exact Match" : `${formatDifference(quotedDelta, currency)} discrepancy`}
+              </span>
+            </div>
 
-              <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
-                <span className="text-[10px] text-slate-400 uppercase font-sans font-semibold block">
-                  Amount Paid
-                </span>
-                <span className="text-sm sm:text-base font-bold text-emerald-300 block mt-0.5">
-                  {formatCurrency(amountPaid ?? 0, currency)}
-                </span>
-              </div>
+            <div className={`p-2.5 rounded-xl border ${isComponentPass ? "bg-emerald-950/20 border-emerald-500/20" : "bg-amber-950/20 border-amber-500/30"}`}>
+              <span className={`text-[10px] uppercase font-sans font-semibold block truncate ${isComponentPass ? "text-emerald-400" : "text-amber-400"}`}>
+                Component Reconciliation
+              </span>
+              <span className={`text-xs sm:text-sm font-bold block mt-0.5 ${isComponentPass ? "text-emerald-300" : "text-amber-300 font-extrabold"}`}>
+                {isComponentPass ? "Exact Match" : `${formatDifference(componentDelta, currency)} discrepancy`}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 text-xs font-mono">
+            <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
+              <span className="text-[10px] text-slate-400 uppercase font-sans font-semibold block">
+                Stated Total
+              </span>
+              <span className="text-sm sm:text-base font-bold text-slate-100 block mt-0.5">
+                {formatCurrency(totalAmount, currency)}
+              </span>
+            </div>
 
-              <div className="col-span-2 sm:col-span-1 p-2.5 rounded-xl bg-brand-950/20 border border-brand-500/20">
-                <span className="text-[10px] text-brand-300 uppercase font-sans font-semibold block">
-                  Balance Due
-                </span>
-                <span className="text-sm sm:text-base font-bold text-brand-200 block mt-0.5">
-                  {formatCurrency(balanceDue ?? totalAmount, currency)}
-                </span>
-              </div>
-            </>
-          )}
-        </div>
+            <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
+              <span className="text-[10px] text-slate-400 uppercase font-sans font-semibold block">
+                Amount Paid
+              </span>
+              <span className="text-sm sm:text-base font-bold text-emerald-300 block mt-0.5">
+                {formatCurrency(amountPaid ?? 0, currency)}
+              </span>
+            </div>
+
+            <div className="col-span-2 sm:col-span-1 p-2.5 rounded-xl bg-brand-950/20 border border-brand-500/20">
+              <span className="text-[10px] text-brand-300 uppercase font-sans font-semibold block">
+                Balance Due
+              </span>
+              <span className="text-sm sm:text-base font-bold text-brand-200 block mt-0.5">
+                {formatCurrency(balanceDue ?? totalAmount, currency)}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 4. Primary Decision Finding (WHAT NEEDS MY ATTENTION?) */}
@@ -356,7 +383,7 @@ export const VerdictBanner: React.FC<VerdictBannerProps> = ({ result, onReset })
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
             <span className="text-xs font-bold uppercase tracking-wider text-amber-300">
-              Requires Verification: Commercial Terms
+              Requires Verification: {primaryFinding.label}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-medium">

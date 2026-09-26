@@ -13,7 +13,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { ValidationCheck } from "../lib/types";
-import { formatCurrency } from "../lib/utils";
+import { formatCurrency, formatDifference } from "../lib/utils";
 
 interface MathVerificationProps {
   checks: ValidationCheck[];
@@ -32,34 +32,63 @@ interface CheckPresentation {
   calculatedLabel: string;
 }
 
-function getCheckPresentation(check: ValidationCheck, isQuotation?: boolean): CheckPresentation {
+function getCheckPresentation(
+  check: ValidationCheck,
+  isQuotation?: boolean,
+  currency?: string | null
+): CheckPresentation {
+  const safeCurrency = currency || "INR";
+  const delta = check.absolute_delta ?? 0;
+  const hasDelta = check.status === "FAIL" || delta > 0.02;
+  const diffStr = formatDifference(delta, safeCurrency);
+
   switch (check.check_code) {
     case "QUOTATION_SUBTOTAL_CONSISTENCY":
       return {
-        title: "Charges add up",
-        simpleExplanation: "All individual vehicle charges add up to the stated subtotal before offers.",
+        title: hasDelta
+          ? `Component Reconciliation — ${diffStr} discrepancy`
+          : "Component Reconciliation — Exact Match",
+        simpleExplanation: hasDelta
+          ? `Listed charges sum to ${formatCheckValue(check.calculated_value, safeCurrency)} vs stated subtotal ${formatCheckValue(check.expected_value, safeCurrency)} (${diffStr} difference). Ask the dealer to clarify.`
+          : "All individual vehicle charges add up to the stated subtotal before offers.",
         expectedLabel: "Stated subtotal",
         calculatedLabel: "Sum of charges",
       };
     case "QUOTATION_NET_TOTAL_CONSISTENCY":
       return {
-        title: "Offers reconcile",
-        simpleExplanation: "Subtotal minus all applied discounts and dealer offers equals the final quoted total.",
+        title: hasDelta
+          ? `Quoted Total Reconciliation — ${diffStr} discrepancy`
+          : "Quoted Total Reconciliation — Exact Match",
+        simpleExplanation: hasDelta
+          ? `Stated subtotal minus offers differs from quoted total by ${diffStr}. Requires verification.`
+          : "Subtotal minus all applied discounts and dealer offers equals the final quoted total.",
         expectedLabel: "Quoted total",
-        calculatedLabel: "Calculated net total",
+        calculatedLabel: "Subtotal − Offers",
       };
     case "ARITHMETIC_LINE_ITEMS_SUM":
+      if (isQuotation) {
+        return {
+          title: hasDelta
+            ? `Cost components reconciled — ${diffStr} discrepancy`
+            : "Cost components reconciled — Exact Match",
+          simpleExplanation: hasDelta
+            ? `Constituent charges differ from the stated subtotal by ${diffStr}. Requires verification.`
+            : "All component charges and discounts align with the quotation breakdown.",
+          expectedLabel: "Stated subtotal",
+          calculatedLabel: "Sum of components",
+        };
+      }
       return {
-        title: isQuotation ? "Cost components reconciled" : "Line items add up",
-        simpleExplanation: isQuotation
-          ? "All component charges and discounts align with the quotation breakdown."
-          : "Sum of itemized lines matches the document subtotal.",
-        expectedLabel: isQuotation ? "Stated subtotal" : "Stated subtotal",
-        calculatedLabel: isQuotation ? "Sum of components" : "Sum of line items",
+        title: "Line items add up",
+        simpleExplanation: "Sum of itemized lines matches the document subtotal.",
+        expectedLabel: "Stated subtotal",
+        calculatedLabel: "Sum of line items",
       };
     case "ARITHMETIC_TOTAL_CONSISTENCY":
       return {
-        title: isQuotation ? "Quoted total matches calculation" : "Total reconciles",
+        title: isQuotation
+          ? (hasDelta ? `Quoted Total Reconciliation — ${diffStr} discrepancy` : "Quoted Total Reconciliation — Exact Match")
+          : "Total reconciles",
         simpleExplanation: isQuotation
           ? "The final quoted on-road price matches the subtotal after deducting all offers."
           : "The invoice total matches the sum of subtotal, statutory taxes, and fees.",
@@ -82,8 +111,11 @@ function getCheckPresentation(check: ValidationCheck, isQuotation?: boolean): Ch
       };
     case "ARITHMETIC_TAX_MATCH":
       return {
-        title: "Statutory charge identified",
-        simpleExplanation: "Effective rate relative to subtotal is 0.9%. Applicability requires transaction/jurisdiction verification.",
+        title: "Effective tax rate",
+        simpleExplanation:
+          check.calculated_value === "0.0%" || check.calculated_value === "0%"
+            ? `Stated tax is ${formatCurrency(0, safeCurrency)} (effective tax rate 0.0%).`
+            : (check.message || "Effective tax rate evaluated against stated subtotal."),
         expectedLabel: "Statutory benchmark",
         calculatedLabel: "Effective tax rate",
       };
@@ -140,17 +172,7 @@ function formatCheckValue(val: string | number | null | undefined, currency?: st
   return String(val);
 }
 
-function formatDifference(delta: number | null | undefined, currency?: string | null): string {
-  if (delta === null || delta === undefined) return "—";
-  if (Math.abs(delta) < 0.01) {
-    if (currency === "INR" || currency === "₹") return "₹0";
-    if (currency === "USD" || currency === "$") return "$0";
-    if (currency === "EUR" || currency === "€") return "€0";
-    if (currency === "GBP" || currency === "£") return "£0";
-    return "0.00";
-  }
-  return formatCurrency(delta, currency);
-}
+
 
 export const MathVerification: React.FC<MathVerificationProps> = ({
   checks,
@@ -211,7 +233,7 @@ export const MathVerification: React.FC<MathVerificationProps> = ({
           const isFail = check.status === "FAIL";
           const isInconclusive = check.status === "INCONCLUSIVE";
           const isExpanded = expandedCheckId === check.validation_id;
-          const presentation = getCheckPresentation(check, isQuotation);
+          const presentation = getCheckPresentation(check, isQuotation, currency);
 
           const isTaxCheck = check.check_code === "ARITHMETIC_TAX_MATCH";
           const hasExpectedValue = check.expected_value !== null || (isTaxCheck && isPass);

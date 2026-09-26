@@ -76,10 +76,18 @@ class ResultAggregatorService:
                 field_map[comp.amount.field_id] = comp.amount
 
         flags: list[DecisionFlag] = []
+        seen_failed_codes = set()
 
         # 1. Convert failed deterministic validation checks to prominent flags
         for check in validation_checks:
             if check.status == ValidationStatus.FAIL:
+                # Deduplicate: if both QUOTATION_SUBTOTAL_CONSISTENCY and ARITHMETIC_LINE_ITEMS_SUM fail on the same component discrepancy, only create one flag
+                if check.check_code == "ARITHMETIC_LINE_ITEMS_SUM" and "QUOTATION_SUBTOTAL_CONSISTENCY" in seen_failed_codes:
+                    continue
+                if check.check_code == "QUOTATION_SUBTOTAL_CONSISTENCY" and "ARITHMETIC_LINE_ITEMS_SUM" in seen_failed_codes:
+                    continue
+                seen_failed_codes.add(check.check_code)
+
                 box_list = self._lookup_boxes(check.input_field_ids, field_map)
                 claim_type = (
                     ClaimType.ADDITIONAL_CHARGE_DETECTED
@@ -116,12 +124,10 @@ class ResultAggregatorService:
                 )
             )
 
-        # 3. Determine overall status and headline
-        overall_status = DecisionStatus.CLEAR
-        headline = "All verified: Stated totals and contract terms align with expectations."
-
-        has_critical_failure = any(f.severity == ValidationSeverity.CRITICAL for f in flags)
-        has_warning = any(f.severity == ValidationSeverity.WARNING for f in flags)
+        # 3. Determine overall status and headline based on substantive review findings
+        review_flags = [f for f in flags if f.severity in (ValidationSeverity.WARNING, ValidationSeverity.CRITICAL)]
+        has_critical_failure = any(f.severity == ValidationSeverity.CRITICAL for f in review_flags)
+        has_warning = any(f.severity == ValidationSeverity.WARNING for f in review_flags)
         has_no_financial_check = any(
             c.check_code in ("NO_FINANCIAL_DATA_AFTER_RELIABLE_OCR", "NO_FINANCIAL_DATA_DETECTED")
             for c in validation_checks
@@ -143,10 +149,10 @@ class ResultAggregatorService:
             headline = "No Financial Data Detected: Document contains no payable obligations."
         elif has_critical_failure:
             overall_status = DecisionStatus.CRITICAL_WARNING
-            headline = f"Action Recommended: {len(flags)} discrepancies detected before proceeding with payment."
+            headline = f"Action Recommended: {len(review_flags)} discrepancies detected before proceeding with payment."
         elif has_warning:
             overall_status = DecisionStatus.REQUIRES_ATTENTION
-            headline = f"Review Recommended: {len(flags)} item{'s' if len(flags) > 1 else ''} require{'s' if len(flags) == 1 else ''} attention or verification."
+            headline = f"Review Recommended: {len(review_flags)} item{'s' if len(review_flags) > 1 else ''} require{'s' if len(review_flags) == 1 else ''} attention or verification."
         else:
             overall_status = DecisionStatus.CLEAR
             if document.document_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN) or document.cost_breakdown:
@@ -157,8 +163,8 @@ class ResultAggregatorService:
         summary = ResultSummary(
             headline=headline,
             overall_status=overall_status,
-            total_flags=len(flags),
-            requires_human_verification=len(flags) > 0,
+            total_flags=len(review_flags),
+            requires_human_verification=len(review_flags) > 0,
             analysis_state=analysis_state,
             ocr_quality=ocr_quality,
         )
@@ -256,6 +262,10 @@ class ResultAggregatorService:
 
     def _format_check_label(self, check_code: str) -> str:
         """Format check code into human-readable mobile UI badge label."""
+        if check_code == "QUOTATION_SUBTOTAL_CONSISTENCY":
+            return "Component Reconciliation Discrepancy"
+        if check_code == "QUOTATION_NET_TOTAL_CONSISTENCY":
+            return "Quoted Total Discrepancy"
         if "NO_FINANCIAL_DATA" in check_code or "FINANCIAL_CONTENT" in check_code:
             return "No Financial Data Detected"
         if "EXTENSION" in check_code:

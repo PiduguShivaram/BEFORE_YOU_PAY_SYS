@@ -15,6 +15,9 @@ export const DecisionFlags: React.FC<DecisionFlagsProps> = ({
   selectedFlagId,
   onSelectFlag,
 }) => {
+  const substantiveFlags = flags.filter((f) => f.severity === "WARNING" || f.severity === "CRITICAL");
+  const displayFlags = substantiveFlags.length > 0 ? substantiveFlags : flags;
+
   return (
     <div className="glass-panel rounded-2xl p-4 sm:p-6 shadow-card mb-6 border border-white/10">
       <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-white/10">
@@ -23,17 +26,17 @@ export const DecisionFlags: React.FC<DecisionFlagsProps> = ({
           <h3 className="font-bold text-sm sm:text-base text-white">Verification Findings</h3>
         </div>
         <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-white/10 text-slate-300">
-          {flags.length} finding{flags.length === 1 ? "" : "s"}
+          {displayFlags.length} finding{displayFlags.length === 1 ? "" : "s"}
         </span>
       </div>
 
-      {flags.length === 0 ? (
+      {displayFlags.length === 0 ? (
         <div className="text-center py-6 text-xs text-slate-400 bg-white/2 rounded-xl border border-white/5">
           No discrepancy flags or unverified clauses detected.
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
-          {flags.map((flag) => {
+          {displayFlags.map((flag) => {
             const isSelected = selectedFlagId === flag.flag_id;
             const isCritical = flag.severity === "CRITICAL";
             const isWarning = flag.severity === "WARNING";

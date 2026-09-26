@@ -193,11 +193,11 @@ export const CostBreakdownCard: React.FC<CostBreakdownCardProps> = ({
           </span>
           {isSubtotalPass ? (
             <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-              <Check className="w-3.5 h-3.5" /> Sum Matches
+              <Check className="w-3.5 h-3.5" /> Component Reconciliation — Exact Match
             </span>
           ) : (
             <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1">
-              <AlertCircle className="w-3.5 h-3.5" /> Discrepancy
+              <AlertCircle className="w-3.5 h-3.5" /> Component Reconciliation — {formatCurrency(subtotalCheck?.absolute_delta ?? Math.abs(computedChargesSum - (subtotal || 0)), currency)} discrepancy
             </span>
           )}
         </div>
@@ -279,7 +279,7 @@ export const CostBreakdownCard: React.FC<CostBreakdownCardProps> = ({
               {formatCurrency(quotedTotal, currency)}
             </span>
             <span className="text-xs text-emerald-400 font-mono font-bold">
-              {isNetTotalPass ? "Net arithmetic verified" : "Requires confirmation"}
+              {isNetTotalPass ? "Quoted Total Reconciliation — Exact Match" : "Requires confirmation"}
             </span>
           </div>
 

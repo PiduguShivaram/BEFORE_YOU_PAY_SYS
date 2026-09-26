@@ -249,9 +249,9 @@ class DeterministicValidationEngine:
                         absolute_delta=delta_sub,
                         severity=ValidationSeverity.WARNING,
                         message=(
-                            f"Quotation charges sum discrepancy: Stated subtotal is {curr_sym}{stated_sub:,.2f}, "
-                            f"but individual components sum to {curr_sym}{sum_charges:,.2f} "
-                            f"(difference: {curr_sym}{delta_sub:,.2f}). Requires verification."
+                            f"Component reconciliation discrepancy: Stated subtotal is {curr_sym}{stated_sub:,.2f}, "
+                            f"but listed components sum to {curr_sym}{sum_charges:,.2f} "
+                            f"(difference: {curr_sym}{delta_sub:,.2f}). Ask the dealer to clarify."
                         ),
                     )
                 )
@@ -311,14 +311,46 @@ class DeterministicValidationEngine:
 
         if not document.line_items:
             if document.cost_breakdown:
-                return ValidationCheck(
-                    validation_id=uuid4(),
-                    check_code="ARITHMETIC_LINE_ITEMS_SUM",
-                    status=ValidationStatus.PASS,
-                    input_field_ids=[c.amount.field_id for c in document.cost_breakdown],
-                    severity=ValidationSeverity.INFO,
-                    message="Document is structured as a cost breakdown quotation; retail itemized extension check evaluated under quotation reconciliation.",
+                charges = [c for c in document.cost_breakdown if c.charge_nature == ChargeNature.CHARGE]
+                sum_charges = round(sum(float(c.amount.normalized_value) for c in charges), 2)
+                stated_sub = (
+                    round(float(document.subtotal.normalized_value), 2)
+                    if document.subtotal
+                    else sum_charges
                 )
+                delta = round(abs(sum_charges - stated_sub), 2)
+                cost_ids = [c.amount.field_id for c in charges]
+                if document.subtotal:
+                    cost_ids.append(document.subtotal.field_id)
+
+                if delta <= 0.02:
+                    return ValidationCheck(
+                        validation_id=uuid4(),
+                        check_code="ARITHMETIC_LINE_ITEMS_SUM",
+                        status=ValidationStatus.PASS,
+                        input_field_ids=cost_ids,
+                        expected_value=stated_sub,
+                        calculated_value=sum_charges,
+                        absolute_delta=delta,
+                        severity=ValidationSeverity.INFO,
+                        message=f"Cost components sum ({curr_sym}{sum_charges:,.2f}) matches stated subtotal ({curr_sym}{stated_sub:,.2f}).",
+                    )
+                else:
+                    return ValidationCheck(
+                        validation_id=uuid4(),
+                        check_code="ARITHMETIC_LINE_ITEMS_SUM",
+                        status=ValidationStatus.FAIL,
+                        input_field_ids=cost_ids,
+                        expected_value=stated_sub,
+                        calculated_value=sum_charges,
+                        absolute_delta=delta,
+                        severity=ValidationSeverity.WARNING,
+                        message=(
+                            f"Cost components sum discrepancy: Stated subtotal is {curr_sym}{stated_sub:,.2f}, "
+                            f"but constituent charges sum to {curr_sym}{sum_charges:,.2f} "
+                            f"(difference: {curr_sym}{delta:,.2f}). Requires verification."
+                        ),
+                    )
             return ValidationCheck(
                 validation_id=uuid4(),
                 check_code="ARITHMETIC_LINE_ITEMS_SUM",
@@ -512,6 +544,27 @@ class DeterministicValidationEngine:
         document: StructuredFinancialDocument,
     ) -> ValidationCheck:
         """Verify that stated tax amount is within plausible statutory limits."""
+        curr_sym = _get_currency_symbol(document.currency)
+
+        # In vehicle quotations or cost breakdowns with 0 or unstated separate tax line:
+        if (
+            document.subtotal
+            and (document.cost_breakdown or document.document_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN))
+            and (not document.tax_amount or float(document.tax_amount.normalized_value) == 0.0)
+        ):
+            input_ids = [document.subtotal.field_id]
+            if document.tax_amount:
+                input_ids.append(document.tax_amount.field_id)
+            return ValidationCheck(
+                validation_id=uuid4(),
+                check_code="ARITHMETIC_TAX_MATCH",
+                status=ValidationStatus.PASS,
+                input_field_ids=input_ids,
+                calculated_value="0.0%",
+                severity=ValidationSeverity.INFO,
+                message=f"Stated tax is {curr_sym}0.00 (effective tax rate 0.0%).",
+            )
+
         if not document.tax_amount or not document.subtotal:
             return ValidationCheck(
                 validation_id=uuid4(),
@@ -525,6 +578,17 @@ class DeterministicValidationEngine:
         tax_val = float(document.tax_amount.normalized_value)
         sub_val = float(document.subtotal.normalized_value)
         input_ids = [document.tax_amount.field_id, document.subtotal.field_id]
+
+        if tax_val == 0.0:
+            return ValidationCheck(
+                validation_id=uuid4(),
+                check_code="ARITHMETIC_TAX_MATCH",
+                status=ValidationStatus.PASS,
+                input_field_ids=input_ids,
+                calculated_value="0.0%",
+                severity=ValidationSeverity.INFO,
+                message=f"Stated tax is {curr_sym}0.00 (effective tax rate 0.0%).",
+            )
 
         if sub_val <= 0:
             return ValidationCheck(
