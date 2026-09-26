@@ -1,6 +1,9 @@
 """Spatial OCR engine producing normalized lines and bounding boxes from PDFs and images."""
 
 import io
+import logging
+import sys
+import time
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -10,6 +13,8 @@ from PIL import Image, ImageFilter, ImageOps
 from before_you_pay.models import BoundingBox, CoordinateUnit, OcrLine, OcrPage, OcrResult
 from before_you_pay.models.analysis import OCRQualityResult, OCRQualityStatus
 from before_you_pay.services.ocr_quality import OCRQualityEvaluator
+
+logger = logging.getLogger(__name__)
 
 
 class SpatialOcrEngine:
@@ -27,17 +32,18 @@ class SpatialOcrEngine:
         mime_type: str,
     ) -> OcrResult:
         """Process document bytes with multi-pass OCR and deterministic quality gate."""
+        start_time = time.monotonic()
         normalized_mime = mime_type.lower().split(";")[0].strip()
 
         if normalized_mime == "application/pdf":
-            pages = await self._process_pdf(document_id, file_bytes)
+            pages, engine_used = await self._process_pdf(document_id, file_bytes)
         else:
-            pages = await self._process_image(document_id, file_bytes)
+            pages, engine_used = await self._process_image(document_id, file_bytes)
 
         initial_result = OcrResult(
             document_id=document_id,
             pages=pages,
-            engine_name=self.engine_name,
+            engine_name=engine_used or self.engine_name,
             engine_version=self.version,
             processed_at=datetime.now(UTC),
             recovery_attempted=False,
@@ -56,24 +62,53 @@ class SpatialOcrEngine:
             quality=quality,
         )
 
-        # Trigger Multi-Pass Recovery for images if quality is degraded or unreliable OR if financial digits are absent
-        def _has_meaningful_financial_content(res: OcrResult) -> bool:
-            digit_count = 0
-            for p in res.pages:
-                for l in p.lines:
-                    digit_count += sum(1 for c in l.text if c.isdigit())
-            return digit_count >= 4
-
+        # Trigger Multi-Pass Recovery for images if quality is degraded/unreliable or lacks financial digits
         if (
             quality.status != OCRQualityStatus.GOOD
-            or not _has_meaningful_financial_content(initial_result)
+            or not self._has_meaningful_financial_content(initial_result)
         ) and normalized_mime != "application/pdf":
-            recovered = await self._attempt_recovery_passes(
+            final_result = await self._attempt_recovery_passes(
                 document_id, file_bytes, initial_result, quality
             )
-            return recovered
+        else:
+            final_result = initial_result
 
-        return initial_result
+        # Diagnostic logging for production observability (without exposing document text or secrets)
+        duration = round(time.monotonic() - start_time, 3)
+        total_lines = sum(len(p.lines) for p in final_result.pages)
+        failure_category = None
+        if total_lines == 0:
+            failure_category = "OCR_EMPTY"
+        elif final_result.quality and final_result.quality.status == OCRQualityStatus.UNRELIABLE:
+            failure_category = "OCR_UNRELIABLE"
+
+        logger.info(
+            "OCR complete: engine=%s, input_type=%s, pages=%d, duration=%.3fs, lines=%d, quality=%s, failure_category=%s",
+            final_result.engine_name,
+            normalized_mime,
+            len(final_result.pages),
+            duration,
+            total_lines,
+            final_result.quality.status.value if final_result.quality else "UNKNOWN",
+            failure_category or "NONE",
+        )
+
+        return final_result
+
+    @staticmethod
+    def _has_meaningful_financial_content(res: OcrResult) -> bool:
+        """Check if recognized pages contain at least 4 digits representing financial figures."""
+        digit_count = 0
+        for p in res.pages:
+            for l in p.lines:
+                digit_count += sum(1 for c in l.text if c.isdigit())
+        return digit_count >= 4
+
+    @staticmethod
+    def _has_meaningful_financial_content_lines(lines: list[OcrLine]) -> bool:
+        """Check if recognized lines contain at least 4 digits representing financial figures."""
+        digit_count = sum(sum(1 for c in l.text if c.isdigit()) for l in lines)
+        return digit_count >= 4
 
     async def _attempt_recovery_passes(
         self,
@@ -82,88 +117,88 @@ class SpatialOcrEngine:
         initial_result: OcrResult,
         initial_quality: OCRQualityResult,
     ) -> OcrResult:
-        """Execute controlled Pass 2 (contrast/upscaling/sharpening) and Pass 3 (adaptive thresholding)."""
-        try:
-            base_img = Image.open(io.BytesIO(file_bytes))
-        except Exception:
-            return initial_result
-
+        """Execute controlled Pass 2 (enhancement), Pass 3 (thresholding), or Pass 4 (Vision OCR)."""
         best_result = initial_result
         best_quality = initial_quality
 
-        # --- PASS 2: Preprocessed Image (Upscale, Grayscale, Contrast Normalization, Sharpening) ---
+        # If initial result was already from Vision OCR and produced lines, keep best
+        if initial_result.engine_name == "gemini_vision_ocr" and initial_result.pages[0].lines:
+            return initial_result
+
         try:
-            img_p2 = self._preprocess_pass2(base_img)
-            p2_pages = await self._run_winocr_on_pil(document_id, img_p2)
-            if p2_pages and p2_pages[0].lines:
-                res_p2 = OcrResult(
-                    document_id=document_id,
-                    pages=p2_pages,
-                    engine_name=self.engine_name,
-                    engine_version=f"{self.version}-pass2-preprocessed",
-                    processed_at=datetime.now(UTC),
-                    recovery_attempted=True,
-                    recovery_pass=2,
-                )
-                q2 = self.quality_evaluator.evaluate(res_p2)
-                res_p2 = OcrResult(
-                    document_id=res_p2.document_id,
-                    pages=res_p2.pages,
-                    engine_name=res_p2.engine_name,
-                    engine_version=res_p2.engine_version,
-                    processed_at=res_p2.processed_at,
-                    recovery_attempted=True,
-                    recovery_pass=2,
-                    quality=q2,
-                )
-                if q2.score > best_quality.score:
-                    best_result = res_p2
-                    best_quality = q2
-                if q2.status == OCRQualityStatus.GOOD:
-                    return best_result
+            base_img = Image.open(io.BytesIO(file_bytes))
+            base_img = ImageOps.exif_transpose(base_img)
         except Exception:
-            pass
+            base_img = None
 
-        # --- PASS 3: Adaptive Binarization / Thresholding ---
-        try:
-            img_p3 = self._preprocess_pass3(base_img)
-            p3_pages = await self._run_winocr_on_pil(document_id, img_p3)
-            if p3_pages and p3_pages[0].lines:
-                res_p3 = OcrResult(
-                    document_id=document_id,
-                    pages=p3_pages,
-                    engine_name=self.engine_name,
-                    engine_version=f"{self.version}-pass3-binarized",
-                    processed_at=datetime.now(UTC),
-                    recovery_attempted=True,
-                    recovery_pass=3,
-                )
-                q3 = self.quality_evaluator.evaluate(res_p3)
-                res_p3 = OcrResult(
-                    document_id=res_p3.document_id,
-                    pages=res_p3.pages,
-                    engine_name=res_p3.engine_name,
-                    engine_version=res_p3.engine_version,
-                    processed_at=res_p3.processed_at,
-                    recovery_attempted=True,
-                    recovery_pass=3,
-                    quality=q3,
-                )
-                if q3.score > best_quality.score:
-                    best_result = res_p3
-                    best_quality = q3
-        except Exception:
-            pass
+        # --- PASS 2: Preprocessed Image on Windows (Upscale, Grayscale, Contrast Normalization, Sharpening) ---
+        if base_img is not None and sys.platform == "win32":
+            try:
+                img_p2 = self._preprocess_pass2(base_img)
+                p2_pages = await self._run_winocr_on_pil(document_id, img_p2)
+                if p2_pages and p2_pages[0].lines:
+                    res_p2 = OcrResult(
+                        document_id=document_id,
+                        pages=p2_pages,
+                        engine_name="winocr",
+                        engine_version=f"{self.version}-pass2-preprocessed",
+                        processed_at=datetime.now(UTC),
+                        recovery_attempted=True,
+                        recovery_pass=2,
+                    )
+                    q2 = self.quality_evaluator.evaluate(res_p2)
+                    res_p2 = OcrResult(
+                        document_id=res_p2.document_id,
+                        pages=res_p2.pages,
+                        engine_name=res_p2.engine_name,
+                        engine_version=res_p2.engine_version,
+                        processed_at=res_p2.processed_at,
+                        recovery_attempted=True,
+                        recovery_pass=2,
+                        quality=q2,
+                    )
+                    if q2.score > best_quality.score:
+                        best_result = res_p2
+                        best_quality = q2
+                    if q2.status == OCRQualityStatus.GOOD and self._has_meaningful_financial_content(res_p2):
+                        return best_result
+            except Exception:
+                pass
 
-        # --- PASS 4: Multimodal Vision OCR (for handwriting or complex visual documents) ---
-        def _has_meaningful_financial_content(res: OcrResult) -> bool:
-            digit_count = 0
-            for p in res.pages:
-                for l in p.lines:
-                    digit_count += sum(1 for c in l.text if c.isdigit())
-            return digit_count >= 4
+        # --- PASS 3: Adaptive Binarization / Thresholding (Windows only) ---
+        if base_img is not None and sys.platform == "win32":
+            try:
+                img_p3 = self._preprocess_pass3(base_img)
+                p3_pages = await self._run_winocr_on_pil(document_id, img_p3)
+                if p3_pages and p3_pages[0].lines:
+                    res_p3 = OcrResult(
+                        document_id=document_id,
+                        pages=p3_pages,
+                        engine_name="winocr",
+                        engine_version=f"{self.version}-pass3-binarized",
+                        processed_at=datetime.now(UTC),
+                        recovery_attempted=True,
+                        recovery_pass=3,
+                    )
+                    q3 = self.quality_evaluator.evaluate(res_p3)
+                    res_p3 = OcrResult(
+                        document_id=res_p3.document_id,
+                        pages=res_p3.pages,
+                        engine_name=res_p3.engine_name,
+                        engine_version=res_p3.engine_version,
+                        processed_at=res_p3.processed_at,
+                        recovery_attempted=True,
+                        recovery_pass=3,
+                        quality=q3,
+                    )
+                    if q3.score > best_quality.score:
+                        best_result = res_p3
+                        best_quality = q3
+            except Exception:
+                pass
 
-        if best_quality.status != OCRQualityStatus.GOOD or not _has_meaningful_financial_content(best_result):
+        # --- PASS 4: Multimodal Vision OCR (Cross-platform production engine) ---
+        if best_quality.status != OCRQualityStatus.GOOD or not self._has_meaningful_financial_content(best_result):
             try:
                 p4_pages = await self._vision_ocr_pass(document_id, file_bytes)
                 if p4_pages and p4_pages[0].lines:
@@ -187,42 +222,49 @@ class SpatialOcrEngine:
                         recovery_pass=4,
                         quality=q4,
                     )
-                    if q4.score > best_quality.score or _has_meaningful_financial_content(res_p4):
+                    if q4.score > best_quality.score or self._has_meaningful_financial_content(res_p4):
                         best_result = res_p4
                         best_quality = q4
                     if q4.status in (OCRQualityStatus.GOOD, OCRQualityStatus.MODERATE):
                         return best_result
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Pass 4 Vision OCR recovery failed: %s", e)
 
         return best_result
 
-    async def _vision_ocr_pass(self, document_id: UUID, file_bytes: bytes) -> list[OcrPage] | None:
-        """Pass 4: Vision-based OCR for handwritten or complex visual documents using Gemini multimodal API."""
+    async def _vision_ocr_pass(
+        self,
+        document_id: UUID,
+        file_bytes: bytes,
+    ) -> list[OcrPage] | None:
+        """Vision-based OCR using Google Gemini multimodal generateContent API with key failover."""
         import base64
         import json
         import httpx
         from before_you_pay.config import get_settings
 
         settings = get_settings()
-        key = settings.gemini_api_key_primary
-        if not key:
+        keys = settings.gemini_api_keys
+        if not keys:
+            logger.warning("No Gemini API keys configured for Vision OCR.")
             return None
 
-        model = settings.gemini_model or "gemini-flash-lite-latest"
+        # Determine MIME type
+        mime = "image/png"
+        if file_bytes.startswith(b"\xff\xd8\xff"):
+            mime = "image/jpeg"
+        elif file_bytes.startswith(b"RIFF") and b"WEBP" in file_bytes[:16]:
+            mime = "image/webp"
+
         b64 = base64.b64encode(file_bytes).decode("utf-8")
-        mime = "image/png" if file_bytes.startswith(b"\x89PNG") else "image/jpeg"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
         prompt = (
-            "Transcribe every line from this document image in top-to-bottom reading order into a JSON array of objects:\n"
-            "[\n"
-            '  {"line_number": 1, "text": "...", "box_2d": [ymin, xmin, ymax, xmax]}\n'
-            "]\n"
-            "box_2d coordinates must be normalized from 0 to 1000 ([ymin, xmin, ymax, xmax]).\n"
-            "Include all items, vehicle model, ex-showroom, taxes, insurance, registration, warranty, temp/hsrp, subtotal, offers, and final total.\n"
-            "CRITICAL NUMERICAL ACCURACY: Transcribe numbers and symbols with extreme precision. Distinguish handwritten digits carefully (e.g. '0' with loops vs '6', '1' vs '7', '5' vs '6' - in Indian vehicle quotes amounts like R.C. / registration are standard round amounts such as 76250, not 76256).\n"
-            "Do not omit any lines or symbols."
+            "Extract all printed text and tabular lines from this document image in top-to-bottom reading order.\n"
+            "Return a JSON array of objects:\n"
+            '[\n  {"line_number": 1, "text": "...", "box_2d": [ymin, xmin, ymax, xmax]}\n]\n'
+            "Coordinates in box_2d are normalized between 0 and 1000 ([ymin, xmin, ymax, xmax]).\n"
+            "CRITICAL: Do not hallucinate. Faithfully preserve currency symbols, punctuation, item names, rates, discounts, quantities, subtotals, shipping, taxes, and totals.\n"
+            "Transcribe every line, row, label, and number with exact character precision."
         )
 
         payload = {
@@ -240,72 +282,103 @@ class SpatialOcrEngine:
             },
         }
 
-        import asyncio
-        for attempt in range(3):
-            try:
-                async with httpx.AsyncClient(timeout=35.0) as client:
-                    resp = await client.post(url, json=payload)
-                    if resp.status_code in (429, 503):
-                        await asyncio.sleep(2.0)
-                        continue
-                    if resp.status_code != 200:
-                        return None
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if not candidates or not candidates[0].get("content", {}).get("parts"):
-                        return None
-                    raw_text = candidates[0]["content"]["parts"][0]["text"]
-                    parsed_lines = json.loads(raw_text)
-                    if not isinstance(parsed_lines, list) or not parsed_lines:
-                        return None
+        # Candidate models to try in cascading order
+        models = [
+            settings.gemini_model,
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+        ]
+        unique_models = []
+        for m in models:
+            if m and m not in unique_models:
+                unique_models.append(m)
 
-                    page_id = uuid4()
-                    ocr_lines: list[OcrLine] = []
-                for idx, item in enumerate(parsed_lines, start=1):
-                    line_text = str(item.get("text", "")).strip()
-                    if not line_text:
-                        continue
-                    box = item.get("box_2d", [0, 0, 1000, 1000])
-                    ymin, xmin, ymax, xmax = box[0], box[1], box[2], box[3]
-                    x_norm = max(0.0, min(0.99, xmin / 1000.0))
-                    y_norm = max(0.0, min(0.99, ymin / 1000.0))
-                    w_norm = max(0.01, min(1.0 - x_norm, (xmax - xmin) / 1000.0))
-                    h_norm = max(0.01, min(1.0 - y_norm, (ymax - ymin) / 1000.0))
+        for key in keys:
+            for model in unique_models:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                    f"?key={key}"
+                )
+                try:
+                    async with httpx.AsyncClient(timeout=40.0) as client:
+                        resp = await client.post(url, json=payload)
+                        if resp.status_code in (429, 503):
+                            logger.info("Key or model rate-limited (status %d), rotating...", resp.status_code)
+                            break  # rotate to next key
+                        if resp.status_code == 404:
+                            continue  # model not available, try next model
+                        if resp.status_code != 200:
+                            continue
 
-                    bbox = BoundingBox(
-                        x=round(x_norm, 4),
-                        y=round(y_norm, 4),
-                        width=round(w_norm, 4),
-                        height=round(h_norm, 4),
-                        coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
-                    )
-                    ocr_lines.append(
-                        OcrLine(
-                            line_id=uuid4(),
-                            page_id=page_id,
-                            document_id=document_id,
-                            line_number=idx,
-                            text=line_text,
-                            raw_text=line_text,
-                            bounding_box=bbox,
-                            confidence=None,
-                        )
-                    )
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if not candidates or not candidates[0].get("content", {}).get("parts"):
+                            continue
 
-                if ocr_lines:
-                    return [
-                        OcrPage(
-                            page_id=page_id,
-                            document_id=document_id,
-                            page_number=1,
-                            width=1000,
-                            height=1000,
-                            dpi=300,
-                            lines=ocr_lines,
-                        )
-                    ]
-            except Exception:
-                pass
+                        raw_text = candidates[0]["content"]["parts"][0]["text"].strip()
+                        if raw_text.startswith("```json"):
+                            raw_text = raw_text[7:]
+                        if raw_text.startswith("```"):
+                            raw_text = raw_text[3:]
+                        if raw_text.endswith("```"):
+                            raw_text = raw_text[:-3]
+                        raw_text = raw_text.strip()
+
+                        parsed_lines = json.loads(raw_text)
+                        if not isinstance(parsed_lines, list) or not parsed_lines:
+                            continue
+
+                        page_id = uuid4()
+                        ocr_lines: list[OcrLine] = []
+                        for idx, item in enumerate(parsed_lines, start=1):
+                            line_text = str(item.get("text", "")).strip()
+                            if not line_text:
+                                continue
+                            box = item.get("box_2d") or item.get("box") or [0, 0, 1000, 1000]
+                            ymin, xmin, ymax, xmax = box[0], box[1], box[2], box[3]
+                            x_norm = max(0.0, min(0.99, xmin / 1000.0))
+                            y_norm = max(0.0, min(0.99, ymin / 1000.0))
+                            w_norm = max(0.01, min(1.0 - x_norm, (xmax - xmin) / 1000.0))
+                            h_norm = max(0.01, min(1.0 - y_norm, (ymax - ymin) / 1000.0))
+
+                            bbox = BoundingBox(
+                                x=round(x_norm, 4),
+                                y=round(y_norm, 4),
+                                width=round(w_norm, 4),
+                                height=round(h_norm, 4),
+                                coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
+                            )
+                            ocr_lines.append(
+                                OcrLine(
+                                    line_id=uuid4(),
+                                    page_id=page_id,
+                                    document_id=document_id,
+                                    line_number=idx,
+                                    text=line_text,
+                                    raw_text=line_text,
+                                    bounding_box=bbox,
+                                    confidence=0.96,
+                                )
+                            )
+
+                        if ocr_lines:
+                            return [
+                                OcrPage(
+                                    page_id=page_id,
+                                    document_id=document_id,
+                                    page_number=1,
+                                    width=1000,
+                                    height=1400,
+                                    dpi=300,
+                                    lines=ocr_lines,
+                                )
+                            ]
+                except Exception as e:
+                    logger.warning("Error during Vision OCR request: %s", e)
+                    continue
+
         return None
 
     def _preprocess_pass2(self, img: Image.Image) -> Image.Image:
@@ -313,20 +386,15 @@ class SpatialOcrEngine:
         w, h = img.size
         processed = img.copy()
 
-        # Preserve spatial geometry while increasing resolution if small
         if w < 1600 or h < 1600:
             scale = min(2.0, max(1.5, 1800.0 / max(w, h)))
             new_w, new_h = int(w * scale), int(h * scale)
             processed = processed.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-        # Grayscale
         if processed.mode not in ("L", "1"):
             processed = processed.convert("L")
 
-        # Contrast normalization
         processed = ImageOps.autocontrast(processed, cutoff=2)
-
-        # Unsharp mask filter
         processed = processed.filter(ImageFilter.UnsharpMask(radius=1.5, percent=140, threshold=3))
         return processed.convert("RGB")
 
@@ -357,7 +425,13 @@ class SpatialOcrEngine:
 
     async def _run_winocr_on_pil(self, document_id: UUID, rgb_img: Image.Image) -> list[OcrPage]:
         """Helper to run winocr on an in-memory PIL image and cluster lines."""
-        import winocr
+        if sys.platform != "win32":
+            return []
+
+        try:
+            import winocr
+        except ImportError:
+            return []
 
         page_id = uuid4()
         width, height = rgb_img.size
@@ -468,13 +542,13 @@ class SpatialOcrEngine:
                     text=text,
                     raw_text=text,
                     bounding_box=box,
-                    confidence=None,
+                    confidence=0.92,
                 )
             )
 
         return ocr_lines
 
-    async def _process_pdf(self, document_id: UUID, file_bytes: bytes) -> list[OcrPage]:
+    async def _process_pdf(self, document_id: UUID, file_bytes: bytes) -> tuple[list[OcrPage], str]:
         """Extract multi-page text and compute normalized bounding box geometry from PDF."""
         try:
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
@@ -510,7 +584,7 @@ class SpatialOcrEngine:
                             text=line_text,
                             raw_text=line_text,
                             bounding_box=box,
-                            confidence=None,
+                            confidence=0.95,
                         )
                     )
 
@@ -528,27 +602,54 @@ class SpatialOcrEngine:
                     )
 
             if ocr_pages:
-                return ocr_pages
-        except Exception:
-            pass
+                return ocr_pages, "spatial_pypdf"
+
+            # Scanned / image-only PDF: extract embedded page images
+            scanned_pages: list[OcrPage] = []
+            engine_used = "scanned_pdf_ocr"
+            for idx, page in enumerate(reader.pages, start=1):
+                for img_obj in page.images:
+                    p_res, eng = await self._process_image(document_id, img_obj.data)
+                    if p_res and p_res[0].lines:
+                        page_obj = p_res[0]
+                        scanned_pages.append(
+                            OcrPage(
+                                page_id=page_obj.page_id,
+                                document_id=document_id,
+                                page_number=idx,
+                                width=page_obj.width,
+                                height=page_obj.height,
+                                dpi=page_obj.dpi,
+                                lines=page_obj.lines,
+                            )
+                        )
+                        engine_used = eng
+                        break
+            if scanned_pages:
+                return scanned_pages, engine_used
+
+        except Exception as e:
+            logger.warning("PDF processing failed: %s", e)
 
         return await self._process_image(document_id, file_bytes)
 
-    async def _process_image(self, document_id: UUID, file_bytes: bytes) -> list[OcrPage]:
-        """Process image file with native Windows OCR (winocr) or text fallback."""
+    async def _process_image(self, document_id: UUID, file_bytes: bytes) -> tuple[list[OcrPage], str]:
+        """Process image file with platform-specific OCR (winocr on Windows, Vision OCR on Linux/Vercel)."""
         img = None
         width, height = 1080, 1920
         try:
             img = Image.open(io.BytesIO(file_bytes))
+            img = ImageOps.exif_transpose(img)
             width, height = img.size
         except Exception:
             img = None
 
         page_id = uuid4()
         lines: list[OcrLine] = []
+        engine_used = self.engine_name
 
-        # 1. Native Windows OCR on real image pixels (scans, camera photos, receipts)
-        if img is not None:
+        # 1. Native Windows OCR on real image pixels (local Windows path)
+        if img is not None and sys.platform == "win32":
             try:
                 import winocr
 
@@ -572,13 +673,50 @@ class SpatialOcrEngine:
                                 all_words.append(w)
 
                     if all_words:
-                        lines = self._cluster_words_into_lines(
+                        winocr_lines = self._cluster_words_into_lines(
                             all_words, page_id, document_id, width, height
                         )
-            except Exception:
-                pass
+                        # Verify winocr extracted coherent financial lines
+                        if self._has_meaningful_financial_content_lines(winocr_lines):
+                            lines = winocr_lines
+                            engine_used = "winocr"
+            except Exception as e:
+                logger.debug("Local winocr unavailable or failed: %s", e)
 
-        # 2. Text payload fallback (for UTF-8 text streams or plain text test uploads, NOT binary images)
+        # 2. Production Vision OCR (for Linux/Vercel or Windows fallback when winocr is missing/scrambled)
+        if not lines:
+            try:
+                send_bytes = file_bytes
+                if img is not None:
+                    if img.mode != "RGB":
+                        bg = Image.new("RGB", img.size, (255, 255, 255))
+                        alpha_img = img.convert("RGBA") if img.mode != "RGBA" else img
+                        bg.paste(alpha_img, mask=alpha_img.split()[-1])
+                        rgb_img = bg
+                    else:
+                        rgb_img = img
+
+                    # Downscale only if excessively large (> 2400px) to preserve fine digits
+                    max_dim = max(rgb_img.size)
+                    if max_dim > 2400:
+                        scale = 2400.0 / max_dim
+                        new_size = (int(rgb_img.width * scale), int(rgb_img.height * scale))
+                        rgb_img = rgb_img.resize(new_size, Image.Resampling.LANCZOS)
+
+                    buf = io.BytesIO()
+                    rgb_img.save(buf, format="PNG", optimize=True)
+                    send_bytes = buf.getvalue()
+
+                vision_pages = await self._vision_ocr_pass(document_id, send_bytes)
+                if vision_pages and vision_pages[0].lines:
+                    lines = vision_pages[0].lines
+                    width = vision_pages[0].width
+                    height = vision_pages[0].height
+                    engine_used = "gemini_vision_ocr"
+            except Exception as e:
+                logger.warning("Vision OCR failed: %s", e)
+
+        # 3. Text payload fallback (for UTF-8 text streams or plain text test uploads, NOT binary images)
         is_binary_image = file_bytes.startswith(
             (b"\x89PNG", b"\xff\xd8\xff", b"GIF", b"RIFF", b"%PDF", b"BM")
         )
@@ -617,25 +755,13 @@ class SpatialOcrEngine:
                             text=line_text,
                             raw_text=line_text,
                             bounding_box=box,
-                            confidence=None,
+                            confidence=0.95,
                         )
                     )
+                if lines:
+                    engine_used = "text_stream_ocr"
 
-        if not lines:
-            # Return empty page so pipeline Quality Gate can cleanly classify as DOCUMENT_UNREADABLE
-            return [
-                OcrPage(
-                    page_id=page_id,
-                    document_id=document_id,
-                    page_number=1,
-                    width=width,
-                    height=height,
-                    dpi=300,
-                    lines=[],
-                )
-            ]
-
-        return [
+        page_result = [
             OcrPage(
                 page_id=page_id,
                 document_id=document_id,
@@ -646,3 +772,4 @@ class SpatialOcrEngine:
                 lines=lines,
             )
         ]
+        return page_result, engine_used

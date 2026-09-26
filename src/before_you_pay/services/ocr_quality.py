@@ -437,10 +437,11 @@ class OCRQualityEvaluator:
             )
 
         # 5. Moderate quality: readable tokens with informal/handwritten phonetic misspellings or non-standard terms
+        has_informal_terms = bool(re.search(r"\b(exshorum|insorane|insorage|waranty|odfer|ex-shorum)\b", full_text, re.I))
         is_handwriting_or_vision = (
-            ocr_result.recovery_pass >= 4
-            or ocr_result.engine_name == "gemini_vision_ocr"
-            or bool(re.search(r"\b(exshorum|insorane|insorage|waranty|odfer|ex-shorum)\b", full_text, re.I))
+            has_informal_terms
+            or (ocr_result.recovery_pass >= 4 and vocabulary_ratio < 0.60)
+            or (ocr_result.engine_name == "gemini_vision_ocr" and vocabulary_ratio < 0.55)
         )
 
         if is_handwriting_or_vision:
