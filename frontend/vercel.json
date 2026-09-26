@@ -13,10 +13,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 60,
-      "includeFiles": [
-        "src_py/**",
-        "data/okf/**"
-      ]
+      "includeFiles": "{src_py/**,data/okf/**}"
     }
   }
 }
