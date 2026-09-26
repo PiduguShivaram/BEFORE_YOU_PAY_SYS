@@ -11,15 +11,22 @@ directory) so all ``before_you_pay.*`` imports resolve correctly.
 import sys
 from pathlib import Path
 
-# On the Vercel Lambda the project root is /var/task/:
-#   __file__          = /var/task/api/index.py
-#   .parent           = /var/task/api/
-#   .parent.parent    = /var/task/          ← lambda root
-#   / "src"           = /var/task/src/      ← where includeFiles bundles src/
-# (Three .parent calls would reach /var/ — wrong.)
-_src_dir = Path(__file__).resolve().parent.parent / "src"
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
+# Resolve package directory across local, monorepo, and Vercel Lambda layouts
+_possible_dirs = [
+    Path(__file__).resolve().parent.parent / "src_py",
+    Path(__file__).resolve().parent.parent / "src",
+    Path(__file__).resolve().parent.parent.parent / "src",
+]
+
+for d in _possible_dirs:
+    if (d / "before_you_pay").exists():
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+        break
+else:
+    fallback = Path(__file__).resolve().parent.parent / "src_py"
+    if str(fallback) not in sys.path:
+        sys.path.insert(0, str(fallback))
 
 from before_you_pay.main import app  # noqa: E402, F401
 

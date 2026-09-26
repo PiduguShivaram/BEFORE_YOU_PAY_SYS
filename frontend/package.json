@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "node -e \"const fs=require('fs'); try { if (fs.existsSync('../src')) { fs.rmSync('src_py',{recursive:true,force:true}); fs.cpSync('../src','./src_py',{recursive:true}); } if (fs.existsSync('../data/okf')) { fs.mkdirSync('./data',{recursive:true}); fs.rmSync('data/okf',{recursive:true,force:true}); fs.cpSync('../data/okf','./data/okf',{recursive:true}); } } catch(e) { console.warn('Sync notice:', e.message); }\" && next build",
     "start": "next start",
     "lint": "next lint"
   },

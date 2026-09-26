@@ -30,3 +30,7 @@ scratch/
 
 # Vercel
 .vercel/
+
+# Scratch & test outputs
+response.json
+
