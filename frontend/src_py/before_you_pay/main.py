@@ -81,8 +81,9 @@ def create_app() -> FastAPI:
         )
 
     # Register Routers
-    # Direct /health endpoint for container probes
+    # Direct /health endpoint for container probes and /api/health for edge proxying
     app.include_router(health_router)
+    app.include_router(health_router, prefix="/api")
     # Prefixed API routes (/api/v1/...)
     app.include_router(api_router, prefix=settings.api_prefix)
 
