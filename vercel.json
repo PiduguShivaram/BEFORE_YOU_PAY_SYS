@@ -1,21 +1,8 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "frontend/package.json",
-      "use": "@vercel/next",
-      "config": {
-        "rootDirectory": "frontend"
-      }
-    },
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    }
-  ],
   "rewrites": [
     {
-      "source": "/api/:path*",
+      "source": "/api/(.*)",
       "destination": "/api/index.py"
     },
     {
@@ -25,8 +12,11 @@
   ],
   "functions": {
     "api/index.py": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": [
+        "src/**",
+        "data/okf/**"
+      ]
     }
   }
 }
-

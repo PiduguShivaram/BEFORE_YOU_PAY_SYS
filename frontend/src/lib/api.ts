@@ -146,7 +146,7 @@ export async function storeUserDocument(
 }
 
 export async function checkBackendHealth(): Promise<{ status: string; app_name: string; version: string }> {
-  const res = await fetch(`${API_BASE}/health`);
+  const res = await fetch(`${API_BASE}/api/health`);
   if (!res.ok) {
     throw new Error("Backend server is unreachable");
   }
