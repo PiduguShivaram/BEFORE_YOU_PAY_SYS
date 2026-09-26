@@ -81,6 +81,15 @@ def create_app() -> FastAPI:
         )
 
     # Register Routers
+    @app.get("/", summary="Service Root Status")
+    async def root() -> dict[str, str]:
+        """Root status endpoint returning service info."""
+        return {
+            "status": "ok",
+            "app_name": settings.app_name,
+            "version": __version__,
+        }
+
     # Direct /health endpoint for container probes and /api/health for edge proxying
     app.include_router(health_router)
     app.include_router(health_router, prefix="/api")
