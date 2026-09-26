@@ -16,7 +16,10 @@ dependencies = [
     "pypdf>=6.19.0",
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30.0",
-    "winocr>=0.0.15",
+    # winocr is Windows-only (uses Windows.Media.Ocr COM API).
+    # It is imported lazily inside ocr.py at runtime, so it is an
+    # optional local-dev dependency only.  Do NOT add it back here or
+    # the Vercel Linux build will fail.
 ]
 
 [project.scripts]
@@ -47,6 +50,11 @@ select = [
     "UP",  # pyupgrade
 ]
 ignore = ["E501", "B008"]
+
+[tool.fastapi]
+# Tells `fastapi run`, `fastapi dev`, and Vercel's Python builder
+# where the application instance lives when using the src-layout.
+entrypoint = "main:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

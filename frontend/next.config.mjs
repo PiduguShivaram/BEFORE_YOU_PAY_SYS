@@ -1,7 +1,15 @@
 /** @type {import('next').NextConfig} */
+const isVercel = Boolean(process.env.VERCEL);
+
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
+    // On Vercel, /api/* is served by the Python serverless function directly —
+    // no rewrite needed (Vercel's own routing handles it via vercel.json).
+    // Locally, proxy to the uvicorn dev server running on port 8000.
+    if (isVercel) {
+      return [];
+    }
     return [
       {
         source: '/api/:path*',
@@ -16,3 +24,4 @@ const nextConfig = {
 };
 
 export default nextConfig;
+

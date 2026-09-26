@@ -23,3 +23,10 @@ package-lock.json
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Runtime data
+data/uploads/
+scratch/
+
+# Vercel
+.vercel/
