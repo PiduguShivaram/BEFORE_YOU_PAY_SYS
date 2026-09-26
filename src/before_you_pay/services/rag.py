@@ -1,6 +1,7 @@
 """Lightweight, zero-dependency User Document RAG service using standard SQLite."""
 
 import sqlite3
+import sys
 from pathlib import Path
 from uuid import UUID
 
@@ -13,12 +14,27 @@ from before_you_pay.models import (
 )
 
 
+def _resolve_db_path() -> str:
+    """Return a writable SQLite path for the current runtime environment.
+
+    - Windows (local development): keeps the existing ``./data/user_documents.db``
+      behaviour, relative to the process working directory.
+    - Linux / Vercel serverless: ``/var/task`` is read-only; ``/tmp`` is the
+      only writable area.  The database is therefore ephemeral — it is reset
+      on each cold-start — which is acceptable for the current RAG store used
+      for intra-session cross-document context.
+    """
+    if sys.platform == "win32":
+        return "./data/user_documents.db"
+    return "/tmp/data/user_documents.db"
+
+
 class SqliteRagService:
     """User Document RAG store utilizing SQLite with strict user_id tenant isolation."""
 
-    def __init__(self, db_path: str = "./data/user_documents.db") -> None:
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: str | None = None) -> None:
+        self.db_path = db_path if db_path is not None else _resolve_db_path()
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:

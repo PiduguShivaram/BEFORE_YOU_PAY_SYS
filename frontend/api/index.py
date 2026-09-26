@@ -11,9 +11,13 @@ directory) so all ``before_you_pay.*`` imports resolve correctly.
 import sys
 from pathlib import Path
 
-# api/index.py is at  <repo>/frontend/api/index.py
-# src/             is at  <repo>/src/
-_src_dir = Path(__file__).resolve().parent.parent.parent / "src"
+# On the Vercel Lambda the project root is /var/task/:
+#   __file__          = /var/task/api/index.py
+#   .parent           = /var/task/api/
+#   .parent.parent    = /var/task/          ← lambda root
+#   / "src"           = /var/task/src/      ← where includeFiles bundles src/
+# (Three .parent calls would reach /var/ — wrong.)
+_src_dir = Path(__file__).resolve().parent.parent / "src"
 if str(_src_dir) not in sys.path:
     sys.path.insert(0, str(_src_dir))
 
