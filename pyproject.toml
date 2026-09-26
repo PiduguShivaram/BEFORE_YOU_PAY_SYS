@@ -1,0 +1,54 @@
+[project]
+name = "before-you-pay"
+version = "0.1.0"
+description = "Phone-first AI decision-support application for financial documents"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Before You Pay Engineering Team" }
+]
+dependencies = [
+    "fastapi>=0.111.0",
+    "groq>=1.7.0",
+    "pillow>=12.3.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "pypdf>=6.19.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30.0",
+    "winocr>=0.0.15",
+]
+
+[project.scripts]
+before-you-pay = "before_you_pay.main:run"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27.0",
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --strict-markers"

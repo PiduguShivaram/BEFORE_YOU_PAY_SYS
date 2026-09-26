@@ -1,0 +1,12 @@
+Samsung A30 MRP = ₹17,999 Rate/Item = ₹16,999 Discount = ₹1,000 Final line amount = ₹15,999
+Samsung Buds MRP = ₹12,999 Rate/Item = ₹12,499 Discount = ₹500 Final line amount = ₹11,999
+Boat Rockers 510 MRP = ₹2,499 Rate/Item = ₹500 Discount = ₹500 Final line amount = ₹1,499
+Taxable Amount = ₹29,497
+CGST = ₹0
+SGST = ₹0
+Subtotal = ₹29,497
+Discount = ₹2,000
+Shipping Details = ₹499
+Amount paid = ₹0
+Balance Due = ₹29,996
+TOTAL AMOUNT = ₹29,996

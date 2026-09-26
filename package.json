@@ -1,0 +1,17 @@
+{
+  "name": "before-you-pay-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n \"api,web\" -c \"blue,green\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "uv run uvicorn before_you_pay.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir src",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix frontend",
+    "lint": "npm run lint --prefix frontend",
+    "test": "uv run pytest"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

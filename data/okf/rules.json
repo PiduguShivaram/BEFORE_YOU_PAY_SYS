@@ -1,0 +1,60 @@
+{
+  "version": "1.0.0",
+  "description": "Open Knowledge Format (OKF) - Curated Financial & Contractual Knowledge Catalog",
+  "rules": [
+    {
+      "rule_id": "OKF-VERIF-MATH-01",
+      "rule_name": "Line Item Sum Integrity",
+      "category": "verification_rule",
+      "summary": "Sum of itemized goods and services must equal stated subtotal.",
+      "source_reference": "GAAP & International Accounting Standards",
+      "version": "1.0.0",
+      "guidance": "Flag any discrepancy where line item extensions do not reconcile with stated subtotal as an additional charge or math discrepancy."
+    },
+    {
+      "rule_id": "OKF-VERIF-TAX-01",
+      "rule_name": "Tax Rate and Surcharge Compliance",
+      "category": "verification_rule",
+      "summary": "Applied tax amounts must reconcile with applicable statutory tax rates on taxable subtotals.",
+      "source_reference": "Statutory Commercial Sales Tax Codes",
+      "version": "1.0.0",
+      "guidance": "Verify whether taxes match the stated rate. Any unaccounted difference should be marked as requiring verification."
+    },
+    {
+      "rule_id": "OKF-RENEW-CLAUSE-01",
+      "rule_name": "Automatic Renewal and Notice Period Requirement",
+      "category": "comparison_rule",
+      "summary": "Recurring subscription agreements must explicitly disclose auto-renewal and minimum cancellation notice windows.",
+      "source_reference": "FTC Negative Option Rule & Consumer Protection Standards",
+      "version": "1.0.0",
+      "guidance": "Identify auto-renewal clauses lacking at least a 30-day prior written notice requirement before billing commitment."
+    },
+    {
+      "rule_id": "OKF-FEE-DISCLOSURE-01",
+      "rule_name": "Undisclosed Ancillary Surcharge",
+      "category": "verification_rule",
+      "summary": "Processing, platform, or administrative surcharges must be itemized before payment commitment.",
+      "source_reference": "Truth in Lending & Consumer Financial Protection Standards",
+      "version": "1.0.0",
+      "guidance": "Flag any general surcharge, convenience fee, or administrative overhead fee not detailed in original quotation."
+    },
+    {
+      "rule_id": "OKF-WARRANTY-SCOPE-01",
+      "rule_name": "Warranty Deductible and Limitations",
+      "category": "document_concept",
+      "summary": "Extended warranty coverage often excludes consumable parts, wear-and-tear, or imposes mandatory deductibles.",
+      "source_reference": "Magnuson-Moss Warranty Act & Commercial Practice",
+      "version": "1.0.0",
+      "guidance": "Highlight limitations, pre-existing condition exclusions, or required out-of-pocket deductibles prior to commitment."
+    },
+    {
+      "rule_id": "OKF-CANCEL-FEE-01",
+      "rule_name": "Early Termination and Restocking Penalties",
+      "category": "terminology",
+      "summary": "Commercial service contracts often impose steep liquidated damages or restocking penalties for cancellation.",
+      "source_reference": "Uniform Commercial Code (UCC) § 2-718",
+      "version": "1.0.0",
+      "guidance": "Review early termination fees that exceed 20% of remaining agreement balance or restocking fees exceeding 15%."
+    }
+  ]
+}
