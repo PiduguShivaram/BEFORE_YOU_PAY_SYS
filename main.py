@@ -25,6 +25,7 @@ async def app(scope, receive, send):
     if scope.get("type") == "http":
         headers = dict(scope.get("headers", []))
         matched_path = headers.get(b"x-matched-path")
+        print(f"ASGI SCOPE: path={scope.get('path')!r} root_path={scope.get('root_path')!r} x-matched-path={matched_path!r}")
         if matched_path:
             path_str = matched_path.decode("utf-8", errors="replace")
             if path_str and path_str != "/api/index.py":
