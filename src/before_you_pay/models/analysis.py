@@ -254,6 +254,138 @@ class ResultSummary(BaseModel):
     ocr_quality: OCRQualityResult | None = None
 
 
+class SmartCostReductionQuestion(BaseModel):
+    """Practical, evidence-grounded question for the buyer to ask the seller.
+
+    Phase 5 Specification:
+    1. Question
+    2. Reason
+    3. Related charge
+    4. Amount involved
+    5. Potential impact if removed/reduced
+    6. Evidence source
+    7. Confidence
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question_id: UUID = Field(default_factory=uuid4)
+    question: str = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1)
+    related_charge: str = Field(..., min_length=1)
+    amount_involved: float | None = None
+    potential_impact: str = Field(..., min_length=1)
+    evidence_source: str = Field(..., min_length=1)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    category: str | None = None
+    priority_score: float = Field(default=0.0, ge=0.0)
+    ranking_factors: dict[str, float] = Field(default_factory=dict)
+    classification: str | None = None
+    potential_amount_to_review: float | None = None
+    requires_verification: bool = Field(default=True)
+
+    @model_validator(mode="after")
+    def validate_tone_and_guardrails(self) -> "SmartCostReductionQuestion":
+        text_to_check = f"{self.question} {self.reason} {self.potential_impact}"
+        match = DISALLOWED_PHRASES_PATTERN.search(text_to_check)
+        if match:
+            raise ValueError(
+                f"SmartCostReductionQuestion contains prohibited language '{match.group(0)}'. "
+                "Questions must maintain a neutral, factual discovery tone."
+            )
+        generic_patterns = [
+            r"can you give me a discount",
+            r"give me a discount",
+            r"can i get a discount",
+            r"any discount",
+        ]
+        q_lower = self.question.lower().strip()
+        for p in generic_patterns:
+            if re.search(r"\b" + p + r"\b", q_lower):
+                raise ValueError(
+                    f"Generic questions like '{p}' are prohibited. "
+                    "Questions must be connected to an actual document finding."
+                )
+        return self
+
+
+PROHIBITED_SAVINGS_PATTERN = re.compile(
+    r"\b(you can save|will save|guaranteed savings?|savings? promise)\b",
+    re.IGNORECASE,
+)
+
+
+class ReductionTierItem(BaseModel):
+    """An individual charge item evaluated for potential cost reduction."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    component_id: UUID = Field(default_factory=uuid4)
+    name: str = Field(..., min_length=1)
+    amount: float = Field(..., ge=0.0)
+    category: str = Field(..., min_length=1)
+    status_label: str = Field(..., min_length=1)
+    evidence: str = Field(..., min_length=1)
+
+
+class PotentialCostReductionSummary(BaseModel):
+    """Phase 7: Potential Cost Reduction Summary without promising savings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirmed_optional_amount: float = Field(default=0.0, ge=0.0)
+    confirmed_optional_items: list[ReductionTierItem] = Field(default_factory=list)
+
+    potentially_optional_amount: float = Field(default=0.0, ge=0.0)
+    potentially_optional_items: list[ReductionTierItem] = Field(default_factory=list)
+
+    unclear_confirmation_amount: float = Field(default=0.0, ge=0.0)
+    unclear_confirmation_items: list[ReductionTierItem] = Field(default_factory=list)
+
+    min_potential_reduction: float = Field(default=0.0, ge=0.0)
+    max_potential_reduction: float = Field(default=0.0, ge=0.0)
+    potential_range_display: str = Field(default="₹0")
+
+    review_message: str = Field(
+        default="You may be able to reduce the quoted amount if the seller confirms these charges are optional or removable."
+    )
+    is_range_valid: bool = Field(default=True)
+    total_charges_reviewed: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_wording_guardrails(self) -> "PotentialCostReductionSummary":
+        text_to_check = f"{self.review_message} {self.potential_range_display}"
+        for item in (
+            self.confirmed_optional_items
+            + self.potentially_optional_items
+            + self.unclear_confirmation_items
+        ):
+            text_to_check += f" {item.name} {item.status_label} {item.evidence}"
+
+        match = PROHIBITED_SAVINGS_PATTERN.search(text_to_check)
+        if match:
+            raise ValueError(
+                f"PotentialCostReductionSummary contains prohibited savings promise '{match.group(0)}'. "
+                "The system must NEVER state 'You can save ₹X' or promise savings."
+            )
+        return self
+
+
+class PlainLanguageExplanation(BaseModel):
+    """Phase 8: Plain-Language Financial Explanation derived purely from extracted evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    quoted_amount_sentence: str = Field(..., min_length=1)
+    base_price_sentence: str = Field(..., min_length=1)
+    charge_breakdown_sentences: list[str] = Field(default_factory=list)
+    offers_sentence: str | None = None
+    discrepancy_sentence: str | None = None
+    clarification_heading: str = Field(default="Before paying, clarify these items:")
+    clarification_items: list[str] = Field(default_factory=list)
+    full_explanation: str = Field(..., min_length=1)
+
+
 class FinalDecisionSupportResult(BaseModel):
     """Complete, evidence-backed decision support payload returned to the user."""
 
@@ -267,9 +399,14 @@ class FinalDecisionSupportResult(BaseModel):
     reasoning_claims: list[ReasoningClaim] = Field(default_factory=list)
     validation_checks: list[ValidationCheck] = Field(default_factory=list)
     document: StructuredFinancialDocument | None = None
+    extra_cost_analysis: dict[str, Any] | None = Field(default=None)
+    smart_questions: list[SmartCostReductionQuestion] = Field(default_factory=list)
+    cost_reduction_summary: PotentialCostReductionSummary | None = None
+    plain_language_explanation: PlainLanguageExplanation | None = None
     raw_ocr_lines: list[str] = Field(default_factory=list)
     ocr_lines: list[OcrLine] = Field(default_factory=list)
     analysis_state: AnalysisState = Field(default=AnalysisState.FINANCIAL_DATA_FOUND)
     ocr_quality: OCRQualityResult | None = None
     disclaimer: str = Field(default=STANDARD_DISCLAIMER)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+

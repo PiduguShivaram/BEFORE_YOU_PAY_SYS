@@ -6,7 +6,6 @@ from uuid import uuid4
 from before_you_pay.core.dates import normalize_date_to_iso
 from before_you_pay.models import (
     ChargeNature,
-    ComponentCategory,
     DocumentClassification,
     StructuredFinancialDocument,
     ValidationCheck,
@@ -210,6 +209,9 @@ class DeterministicValidationEngine:
 
         charges = [c for c in document.cost_breakdown if c.charge_nature == ChargeNature.CHARGE]
         deductions = [c for c in document.cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION]
+
+        if not charges:
+            return results
 
         sum_charges = round(sum(float(c.amount.normalized_value) for c in charges), 2)
         sum_deductions = round(sum(float(c.amount.normalized_value) for c in deductions), 2)

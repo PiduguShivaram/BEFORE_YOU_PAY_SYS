@@ -129,25 +129,74 @@ export interface ExtractedField {
 
 export type ComponentCategory =
   | "base_price"
+  | "ex_showroom_price"
   | "tax"
+  | "tcs"
+  | "gst"
   | "insurance"
   | "registration"
+  | "road_tax"
+  | "rc"
+  | "hsrp"
   | "warranty"
-  | "accessory_or_fee"
+  | "extended_warranty"
+  | "accessory"
+  | "accessory_package"
+  | "handling_fee"
+  | "logistics_fee"
+  | "processing_fee"
+  | "fastag"
+  | "dealer_package"
+  | "service_package"
+  | "other_fee"
   | "discount"
+  | "offer"
   | "subtotal"
   | "total"
+  | "amount_paid"
+  | "balance_due"
+  | "unknown"
+  | "unclear"
+  | "accessory_or_fee"
   | "other";
 
 export type ChargeNature = "charge" | "deduction";
 
+export type OptionalityStatus =
+  | "confirmed_mandatory"
+  | "confirmed_optional"
+  | "potentially_optional"
+  | "unclear"
+  | "not_applicable"
+  | "mandatory"
+  | "optional";
+
 export interface FinancialComponent {
   component_id: string;
   name: string;
+  raw_name?: string;
+  raw_label?: string;
+  normalized_name?: string;
+  normalized_label?: string;
   amount: ExtractedField;
   category: ComponentCategory;
   charge_nature: ChargeNature;
+  charge_or_deduction?: "charge" | "deduction";
+  optionality_status?: OptionalityStatus | string;
+  optionality_display?: string | null;
+  charge_status?: string | null;
+  charge_status_display?: string | null;
+  requires_verification?: boolean;
+  document_states?: string | null;
+  system_knows?: string | null;
+  requires_confirmation?: string | null;
   is_optional: boolean;
+  confidence?: number;
+  evidence?: string;
+  source_ocr_line?: string | null;
+  bounding_box?: BoundingBox | null;
+  page?: number | null;
+  explanation?: string | null;
 }
 
 export interface LineItem {
@@ -193,11 +242,98 @@ export interface FinalDecisionSupportResult {
   reasoning_claims: ReasoningClaim[];
   validation_checks: ValidationCheck[];
   document?: StructuredFinancialDocument | null;
+  extra_cost_analysis?: ExtraCostAnalysisResult | null;
+  smart_questions?: SmartCostReductionQuestion[];
+  cost_reduction_summary?: PotentialCostReductionSummary | null;
+  plain_language_explanation?: PlainLanguageExplanation | null;
   raw_ocr_lines?: string[];
   ocr_lines?: OcrLine[];
   analysis_state?: AnalysisState;
   ocr_quality?: OCRQualityResult | null;
   generated_at: string;
+}
+
+export interface PlainLanguageExplanation {
+  quoted_amount_sentence: string;
+  base_price_sentence: string;
+  charge_breakdown_sentences: string[];
+  offers_sentence?: string | null;
+  discrepancy_sentence?: string | null;
+  clarification_heading: string;
+  clarification_items: string[];
+  full_explanation: string;
+}
+
+export interface ReductionTierItem {
+  component_id: string;
+  name: string;
+  amount: number;
+  category: string;
+  status_label: string;
+  evidence: string;
+}
+
+export interface PotentialCostReductionSummary {
+  confirmed_optional_amount: number;
+  confirmed_optional_items: ReductionTierItem[];
+  potentially_optional_amount: number;
+  potentially_optional_items: ReductionTierItem[];
+  unclear_confirmation_amount: number;
+  unclear_confirmation_items: ReductionTierItem[];
+  min_potential_reduction: number;
+  max_potential_reduction: number;
+  potential_range_display: string;
+  review_message: string;
+  is_range_valid: boolean;
+  total_charges_reviewed: number;
+}
+
+export interface SmartCostReductionQuestion {
+  question_id: string;
+  question: string;
+  reason: string;
+  related_charge: string;
+  amount_involved?: number | null;
+  potential_impact: string;
+  evidence_source: string;
+  confidence: number;
+  category?: string | null;
+  priority_score: number;
+  ranking_factors?: Record<string, number>;
+}
+
+export type ExtraCostFlagType =
+  | "potentially_optional"
+  | "additional_charge"
+  | "dealer_added"
+  | "bundled_package"
+  | "unclear_charge"
+  | "possible_duplicate"
+  | "requires_verification";
+
+export interface ExtraCostFlag {
+  component_id: string;
+  flag_type: ExtraCostFlagType;
+  flag_label: string;
+  what: string;
+  normalized_name: string;
+  category: string;
+  amount: number;
+  why_flagged: string;
+  what_to_verify: string;
+  potential_saving: number | null;
+  saving_language: string | null;
+  bundled_questions: string[];
+  evidence: string | null;
+  optionality_status: string | null;
+}
+
+export interface ExtraCostAnalysisResult {
+  flagged_costs: ExtraCostFlag[];
+  total_potential_reduction: number;
+  total_flagged_count: number;
+  total_charges_analyzed: number;
+  reduction_summary: string;
 }
 
 export interface RagRecord {
@@ -216,3 +352,4 @@ export interface OkfRule {
   version: string;
   guidance: string;
 }
+

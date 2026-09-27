@@ -426,13 +426,38 @@ class HybridLlmExtractionEngine:
         raw_components = parsed.get("cost_breakdown", [])
         cost_breakdown: list[FinancialComponent] = []
         for c_idx, comp in enumerate(raw_components):
-            comp_name = str(comp.get("name", f"Component {c_idx + 1}")).strip()
+            raw_comp_name = str(comp.get("name") or "").strip()
             comp_amt = float(comp.get("amount") or 0.0)
-            comp_cat_raw = str(comp.get("category", "other")).lower().strip()
+
+            # Match provenance line
+            matched_comp_line = self._find_matching_line(raw_comp_name, all_lines) if raw_comp_name else None
+            if not matched_comp_line and comp_amt > 0:
+                amt_str = str(int(comp_amt)) if comp_amt.is_integer() else f"{comp_amt:.2f}"
+                for ln in all_lines:
+                    cleaned_line = ln.text.replace(",", "").replace(" ", "").replace("=", "").replace("-", "")
+                    if amt_str in cleaned_line:
+                        matched_comp_line = ln
+                        break
+
+            # If name is generic or missing, recover genuine label from matched OCR line
+            is_generic = (
+                not raw_comp_name
+                or raw_comp_name.lower().startswith("component")
+                or raw_comp_name.lower().startswith("financial component")
+                or raw_comp_name.lower() in ["other charge", "detected amount"]
+            )
+            if is_generic and matched_comp_line:
+                from before_you_pay.services.financial_taxonomy import clean_component_text
+                recovered_label = clean_component_text(matched_comp_line.text)
+                comp_name = recovered_label or raw_comp_name or "Unclear"
+            else:
+                comp_name = raw_comp_name or "Unclear"
+
+            comp_cat_raw = str(comp.get("category", "unclear")).lower().strip()
             try:
                 comp_cat = ComponentCategory(comp_cat_raw)
             except ValueError:
-                comp_cat = ComponentCategory.OTHER
+                comp_cat = ComponentCategory.UNCLEAR
 
             comp_nature_raw = str(comp.get("charge_nature", "charge")).lower().strip()
             name_lower = comp_name.lower()
@@ -445,16 +470,6 @@ class HybridLlmExtractionEngine:
                     else ChargeNature.CHARGE
                 )
             is_optional = bool(comp.get("is_optional", False))
-
-            # Match provenance line
-            matched_comp_line = self._find_matching_line(comp_name, all_lines)
-            if not matched_comp_line and comp_amt > 0:
-                amt_str = str(int(comp_amt)) if comp_amt.is_integer() else f"{comp_amt:.2f}"
-                for ln in all_lines:
-                    cleaned_line = ln.text.replace(",", "").replace(" ", "").replace("=", "").replace("-", "")
-                    if amt_str in cleaned_line:
-                        matched_comp_line = ln
-                        break
 
             comp_prov = FieldProvenance(
                 document_id=document_id,
@@ -476,10 +491,17 @@ class HybridLlmExtractionEngine:
                 FinancialComponent(
                     component_id=uuid4(),
                     name=comp_name,
+                    raw_name=matched_comp_line.text if matched_comp_line else comp_name,
+                    raw_label=comp_name,
+                    normalized_label=comp.get("normalized_label") or comp.get("normalized_name"),
                     amount=amt_field,
                     category=comp_cat,
                     charge_nature=comp_nature,
                     is_optional=is_optional,
+                    source_ocr_line=str(matched_comp_line.line_id) if matched_comp_line else (str(default_line_ids[0]) if default_line_ids else None),
+                    bounding_box=matched_comp_line.bounding_box if matched_comp_line else default_bbox,
+                    page=first_page.page_number if hasattr(first_page, "page_number") else 1,
+                    evidence=matched_comp_line.text if matched_comp_line else f"{comp_name}: {comp_amt}",
                 )
             )
 

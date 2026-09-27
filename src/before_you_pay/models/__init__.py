@@ -11,14 +11,22 @@ from before_you_pay.models.analysis import (
     OkfCategory,
     OkfQuery,
     OkfRuleEvidence,
+    PlainLanguageExplanation,
+    PotentialCostReductionSummary,
     RagEvidenceChunk,
     RagQuery,
     ReasoningClaim,
+    ReductionTierItem,
     ResultSummary,
+    SmartCostReductionQuestion,
     StandardError,
     ValidationCheck,
     ValidationSeverity,
     ValidationStatus,
+)
+from before_you_pay.models.cost_review import (
+    CostReviewClassification,
+    CostReviewQuestion,
 )
 from before_you_pay.models.document import (
     BoundingBox,
@@ -34,6 +42,7 @@ from before_you_pay.models.document import (
     OcrLine,
     OcrPage,
     OcrResult,
+    OptionalityStatus,
     StructuredFinancialDocument,
 )
 
@@ -44,6 +53,7 @@ __all__ = [
     "DocumentClassification",
     "ComponentCategory",
     "ChargeNature",
+    "OptionalityStatus",
     "DocumentMetadata",
     "OcrLine",
     "OcrPage",
@@ -72,4 +82,10 @@ __all__ = [
     "OkfQuery",
     "ValidationCheck",
     "ReasoningClaim",
+    "SmartCostReductionQuestion",
+    "CostReviewClassification",
+    "CostReviewQuestion",
+    "ReductionTierItem",
+    "PotentialCostReductionSummary",
+    "PlainLanguageExplanation",
 ]

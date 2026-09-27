@@ -100,14 +100,14 @@ class SpatialOcrEngine:
         """Check if recognized pages contain at least 4 digits representing financial figures."""
         digit_count = 0
         for p in res.pages:
-            for l in p.lines:
-                digit_count += sum(1 for c in l.text if c.isdigit())
+            for line in p.lines:
+                digit_count += sum(1 for c in line.text if c.isdigit())
         return digit_count >= 4
 
     @staticmethod
     def _has_meaningful_financial_content_lines(lines: list[OcrLine]) -> bool:
         """Check if recognized lines contain at least 4 digits representing financial figures."""
-        digit_count = sum(sum(1 for c in l.text if c.isdigit()) for l in lines)
+        digit_count = sum(sum(1 for c in line.text if c.isdigit()) for line in lines)
         return digit_count >= 4
 
     async def _attempt_recovery_passes(
@@ -240,7 +240,9 @@ class SpatialOcrEngine:
         """Vision-based OCR using Google Gemini multimodal generateContent API with key failover."""
         import base64
         import json
+
         import httpx
+
         from before_you_pay.config import get_settings
 
         settings = get_settings()
@@ -264,7 +266,8 @@ class SpatialOcrEngine:
             '[\n  {"line_number": 1, "text": "...", "box_2d": [ymin, xmin, ymax, xmax]}\n]\n'
             "Coordinates in box_2d are normalized between 0 and 1000 ([ymin, xmin, ymax, xmax]).\n"
             "CRITICAL: Do not hallucinate. Faithfully preserve currency symbols, punctuation, item names, rates, discounts, quantities, subtotals, shipping, taxes, and totals.\n"
-            "Transcribe every line, row, label, and number with exact character precision."
+            "Transcribe every line, row, label, and number with exact character precision.\n"
+            "If the image is noise, blurred beyond recognition, blank, or contains no readable text, return an empty array []."
         )
 
         payload = {
@@ -287,97 +290,106 @@ class SpatialOcrEngine:
             settings.gemini_model,
             "gemini-flash-lite-latest",
             "gemini-3.5-flash-lite",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash",
+            "gemini-3.1-flash-lite",
         ]
         unique_models = []
         for m in models:
             if m and m not in unique_models:
                 unique_models.append(m)
 
-        for key in keys:
-            for model in unique_models:
-                url = (
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-                    f"?key={key}"
-                )
-                try:
-                    async with httpx.AsyncClient(timeout=40.0) as client:
-                        resp = await client.post(url, json=payload)
-                        if resp.status_code in (429, 503):
-                            logger.info("Key or model rate-limited (status %d), rotating...", resp.status_code)
-                            break  # rotate to next key
-                        if resp.status_code == 404:
-                            continue  # model not available, try next model
-                        if resp.status_code != 200:
-                            continue
+        import asyncio
 
-                        data = resp.json()
-                        candidates = data.get("candidates", [])
-                        if not candidates or not candidates[0].get("content", {}).get("parts"):
-                            continue
-
-                        raw_text = candidates[0]["content"]["parts"][0]["text"].strip()
-                        if raw_text.startswith("```json"):
-                            raw_text = raw_text[7:]
-                        if raw_text.startswith("```"):
-                            raw_text = raw_text[3:]
-                        if raw_text.endswith("```"):
-                            raw_text = raw_text[:-3]
-                        raw_text = raw_text.strip()
-
-                        parsed_lines = json.loads(raw_text)
-                        if not isinstance(parsed_lines, list) or not parsed_lines:
-                            continue
-
-                        page_id = uuid4()
-                        ocr_lines: list[OcrLine] = []
-                        for idx, item in enumerate(parsed_lines, start=1):
-                            line_text = str(item.get("text", "")).strip()
-                            if not line_text:
+        for attempt in range(2):
+            for key in keys:
+                for model in unique_models:
+                    url = (
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                        f"?key={key}"
+                    )
+                    try:
+                        async with httpx.AsyncClient(timeout=40.0) as client:
+                            resp = await client.post(url, json=payload)
+                            if resp.status_code in (429, 503):
+                                logger.info("Model %s rate-limited (%d), trying next...", model, resp.status_code)
+                                await asyncio.sleep(0.5)
                                 continue
-                            box = item.get("box_2d") or item.get("box") or [0, 0, 1000, 1000]
-                            ymin, xmin, ymax, xmax = box[0], box[1], box[2], box[3]
-                            x_norm = max(0.0, min(0.99, xmin / 1000.0))
-                            y_norm = max(0.0, min(0.99, ymin / 1000.0))
-                            w_norm = max(0.01, min(1.0 - x_norm, (xmax - xmin) / 1000.0))
-                            h_norm = max(0.01, min(1.0 - y_norm, (ymax - ymin) / 1000.0))
+                            if resp.status_code == 404:
+                                continue  # model not available, try next model
+                            if resp.status_code != 200:
+                                continue
 
-                            bbox = BoundingBox(
-                                x=round(x_norm, 4),
-                                y=round(y_norm, 4),
-                                width=round(w_norm, 4),
-                                height=round(h_norm, 4),
-                                coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
-                            )
-                            ocr_lines.append(
-                                OcrLine(
-                                    line_id=uuid4(),
-                                    page_id=page_id,
-                                    document_id=document_id,
-                                    line_number=idx,
-                                    text=line_text,
-                                    raw_text=line_text,
-                                    bounding_box=bbox,
-                                    confidence=0.96,
-                                )
-                            )
+                            data = resp.json()
+                            candidates = data.get("candidates", [])
+                            if not candidates or not candidates[0].get("content", {}).get("parts"):
+                                continue
 
-                        if ocr_lines:
-                            return [
-                                OcrPage(
-                                    page_id=page_id,
-                                    document_id=document_id,
-                                    page_number=1,
-                                    width=1000,
-                                    height=1400,
-                                    dpi=300,
-                                    lines=ocr_lines,
+                            raw_text = candidates[0]["content"]["parts"][0]["text"].strip()
+                            if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.startswith("```"):
+                                raw_text = raw_text[3:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            raw_text = raw_text.strip()
+
+                            parsed_lines = json.loads(raw_text)
+                            if not isinstance(parsed_lines, list) or not parsed_lines:
+                                continue
+
+                            page_id = uuid4()
+                            ocr_lines: list[OcrLine] = []
+                            for idx, item in enumerate(parsed_lines, start=1):
+                                line_text = str(item.get("text", "")).strip()
+                                if not line_text:
+                                    continue
+                                box = item.get("box_2d") or item.get("box") or [0, 0, 1000, 1000]
+                                try:
+                                    ymin, xmin, ymax, xmax = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+                                except (ValueError, TypeError, IndexError):
+                                    ymin, xmin, ymax, xmax = 0.0, 0.0, 1000.0, 1000.0
+                                x_norm = max(0.0, min(0.99, xmin / 1000.0))
+                                y_norm = max(0.0, min(0.99, ymin / 1000.0))
+                                w_norm = max(0.01, min(1.0 - x_norm, (xmax - xmin) / 1000.0))
+                                h_norm = max(0.01, min(1.0 - y_norm, (ymax - ymin) / 1000.0))
+
+                                bbox = BoundingBox(
+                                    x=round(x_norm, 4),
+                                    y=round(y_norm, 4),
+                                    width=round(w_norm, 4),
+                                    height=round(h_norm, 4),
+                                    coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
                                 )
-                            ]
-                except Exception as e:
-                    logger.warning("Error during Vision OCR request: %s", e)
-                    continue
+                                ocr_lines.append(
+                                    OcrLine(
+                                        line_id=uuid4(),
+                                        page_id=page_id,
+                                        document_id=document_id,
+                                        line_number=idx,
+                                        text=line_text,
+                                        raw_text=line_text,
+                                        bounding_box=bbox,
+                                        confidence=0.96,
+                                    )
+                                )
+
+                            if ocr_lines:
+                                return [
+                                    OcrPage(
+                                        page_id=page_id,
+                                        document_id=document_id,
+                                        page_number=1,
+                                        width=1000,
+                                        height=1400,
+                                        dpi=300,
+                                        lines=ocr_lines,
+                                    )
+                                ]
+                    except Exception as e:
+                        logger.warning("Error during Vision OCR request: %s", e)
+                        continue
+
+            if attempt == 0:
+                await asyncio.sleep(2.0)
 
         return None
 

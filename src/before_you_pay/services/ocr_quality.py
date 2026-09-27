@@ -364,21 +364,20 @@ class OCRQualityEvaluator:
 
         # Decision Matrix
         # 1. Extreme sparsity
-        if character_count < 25 or word_count < 4:
-            if vocabulary_ratio < 0.25:
-                reasons.append(
-                    f"Extracted text volume is too sparse ({character_count} chars, {word_count} tokens)."
-                )
-                return OCRQualityResult(
-                    status=OCRQualityStatus.UNRELIABLE,
-                    score=0.15,
-                    reasons=reasons,
-                    line_count=line_count,
-                    character_count=character_count,
-                    word_count=word_count,
-                    alphanumeric_ratio=alphanumeric_ratio,
-                    garbage_token_ratio=garbage_token_ratio,
-                )
+        if (character_count < 15 and word_count <= 2) or ((character_count < 25 or word_count < 4) and vocabulary_ratio < 0.25):
+            reasons.append(
+                f"Extracted text volume is too sparse ({character_count} chars, {word_count} tokens)."
+            )
+            return OCRQualityResult(
+                status=OCRQualityStatus.UNRELIABLE,
+                score=0.15,
+                reasons=reasons,
+                line_count=line_count,
+                character_count=character_count,
+                word_count=word_count,
+                alphanumeric_ratio=alphanumeric_ratio,
+                garbage_token_ratio=garbage_token_ratio,
+            )
 
         # 2. High garbage token concentration (corrupted OCR artifacts)
         if garbage_token_ratio >= 0.28 or (

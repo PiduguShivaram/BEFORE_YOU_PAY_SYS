@@ -12,6 +12,11 @@ import { DocumentViewer } from "../components/DocumentViewer";
 import { RagDrawer } from "../components/RagDrawer";
 import { OkfModal } from "../components/OkfModal";
 import { CostBreakdownCard } from "../components/CostBreakdownCard";
+import { ExtraCostAnalysisCard } from "../components/ExtraCostAnalysisCard";
+import { PlainLanguageExplanationCard } from "../components/PlainLanguageExplanationCard";
+import { PotentialCostReductionCard } from "../components/PotentialCostReductionCard";
+import { SmartQuestionsCard } from "../components/SmartQuestionsCard";
+import { WaysToReviewCostCard } from "../components/WaysToReviewCostCard";
 import {
   DecisionFlag,
   DocumentClassification,
@@ -248,10 +253,10 @@ export default function Home() {
         };
       });
     }
+    if (result) return [];
 
-    // 2. Fallback to raw text parsing if plain text provided
-    const textToParse =
-      (result?.raw_ocr_lines && result.raw_ocr_lines.length > 0 ? result.raw_ocr_lines.join("\n") : documentText) || "";
+    // 2. Fallback to raw text parsing only if manual text without result
+    const textToParse = documentText || "";
     if (!textToParse) return [];
 
     const lines = textToParse.split("\n");
@@ -325,6 +330,13 @@ export default function Home() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Primary Column (Cost Breakdown, Flags, Arithmetic Verification) */}
               <div className="lg:col-span-7 space-y-6">
+                {/* Phase 8: Plain-Language Financial Explanation */}
+                {result?.plain_language_explanation && (
+                  <PlainLanguageExplanationCard
+                    explanation={result.plain_language_explanation}
+                  />
+                )}
+
                 {/* 6. Cost Breakdown (Stacked Mobile Rows with Tap-to-Inspect) */}
                 {result?.document?.cost_breakdown && result.document.cost_breakdown.length > 0 && (
                   <CostBreakdownCard
@@ -344,6 +356,42 @@ export default function Home() {
                     validationChecks={result.validation_checks}
                     selectedComponentId={selectedComponentId}
                     onSelectComponent={handleSelectComponent}
+                    smartQuestions={result.smart_questions}
+                  />
+                )}
+
+                {/* Phase 7: Potential Cost Reduction Summary */}
+                {result?.cost_reduction_summary && (
+                  <PotentialCostReductionCard
+                    summary={result.cost_reduction_summary}
+                    currency={result.document?.currency}
+                  />
+                )}
+
+                {/* Potential Extra Costs & Cost Reduction Analysis */}
+                {result?.extra_cost_analysis && result.extra_cost_analysis.flagged_costs && result.extra_cost_analysis.flagged_costs.length > 0 && (
+                  <ExtraCostAnalysisCard
+                    analysis={result.extra_cost_analysis}
+                    currency={result.document?.currency}
+                  />
+                )}
+
+                {/* Phase 5: Ways to Review This Cost */}
+                {result?.document?.cost_breakdown && result.document.cost_breakdown.length > 0 && (
+                  <WaysToReviewCostCard
+                    components={result.document.cost_breakdown}
+                    extraCostAnalysis={result.extra_cost_analysis}
+                    smartQuestions={result.smart_questions}
+                    validationChecks={result.validation_checks}
+                    currency={result.document?.currency}
+                  />
+                )}
+
+                {/* Questions to ask before paying */}
+                {result?.smart_questions && result.smart_questions.length > 0 && (
+                  <SmartQuestionsCard
+                    questions={result.smart_questions}
+                    currency={result.document?.currency}
                   />
                 )}
 

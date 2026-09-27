@@ -1,8 +1,11 @@
 import os
 from uuid import uuid4
+
 import pytest
+
 from before_you_pay.models import ValidationStatus
 from before_you_pay.services.pipeline import PipelineService
+
 
 @pytest.mark.anyio
 async def test_zetran_bill_regression():
@@ -33,19 +36,67 @@ async def test_zetran_bill_regression():
     doc = result.document
     assert doc is not None
 
-    # Check grand total and line item sum
+    # Vendor: Zetran Technologies Pvt., Ltd.
+    assert doc.vendor_name is not None
+    assert doc.vendor_name.normalized_value == "Zetran Technologies Pvt., Ltd."
+
+    # Dates
+    assert doc.issued_date is not None
+    assert doc.issued_date.normalized_value == "2020-06-11"
+    assert doc.due_date is not None
+    assert doc.due_date.normalized_value == "2020-07-11"
+
+    # Line items: Exactly 3
+    assert len(doc.line_items) == 3
+    items = {li.description.normalized_value: li for li in doc.line_items}
+
+    assert "Samsung A30" in items
+    a30 = items["Samsung A30"]
+    assert a30.mrp is not None and float(a30.mrp.normalized_value) == 17999.0
+    assert a30.unit_price is not None and float(a30.unit_price.normalized_value) == 16999.0
+    assert a30.discount is not None and float(a30.discount.normalized_value) == 1000.0
+    assert float(a30.total_price.normalized_value) == 15999.0
+
+    assert "Samsung Buds" in items
+    buds = items["Samsung Buds"]
+    assert buds.mrp is not None and float(buds.mrp.normalized_value) == 12999.0
+    assert buds.unit_price is not None and float(buds.unit_price.normalized_value) == 12499.0
+    assert buds.discount is not None and float(buds.discount.normalized_value) == 500.0
+    assert float(buds.total_price.normalized_value) == 11999.0
+
+    assert "Boat Rockers 510" in items
+    boat = items["Boat Rockers 510"]
+    assert boat.mrp is not None and float(boat.mrp.normalized_value) == 2499.0
+    assert boat.unit_price is not None and float(boat.unit_price.normalized_value) == 500.0
+    assert boat.discount is not None and float(boat.discount.normalized_value) == 500.0
+    assert float(boat.total_price.normalized_value) == 1499.0
+
+    # Financial totals
+    assert doc.subtotal is not None
+    assert float(doc.subtotal.normalized_value) == 29497.0
+    assert doc.tax_amount is not None
+    assert float(doc.tax_amount.normalized_value) == 0.0
+    assert doc.shipping_amount is not None
+    assert float(doc.shipping_amount.normalized_value) == 499.0
     assert doc.total_amount is not None
     assert float(doc.total_amount.normalized_value) == 29996.0
+    assert doc.discount_amount is not None
+    assert float(doc.discount_amount.normalized_value) == 2000.0
 
     # 3. Deterministic Validation checks
+    # Only 1 item requires verification (Boat Rockers)
+    failed_checks = [c for c in result.validation_checks if c.status == ValidationStatus.FAIL]
+    assert len(failed_checks) == 1
+    assert failed_checks[0].check_code == "LINE_ITEM_EXTENSION_MATCH"
+
+    # Line Item Sum, Total, Tax, Dates must PASS
     checks_by_code = {c.check_code: c for c in result.validation_checks}
+    assert checks_by_code["ARITHMETIC_LINE_ITEMS_SUM"].status == ValidationStatus.PASS
+    assert checks_by_code["ARITHMETIC_TOTAL_CONSISTENCY"].status == ValidationStatus.PASS
+    assert checks_by_code["ARITHMETIC_TAX_MATCH"].status == ValidationStatus.PASS
+    assert checks_by_code["DATE_SEQUENCE_CHECK"].status == ValidationStatus.PASS
 
-    # Grand total arithmetic consistency must PASS
-    total_chk = checks_by_code.get("ARITHMETIC_TOTAL_CONSISTENCY")
-    assert total_chk is not None
-    assert total_chk.status == ValidationStatus.PASS
-
-    # Boat Rockers line item inconsistency must trigger FAIL
-    boat_chk = checks_by_code.get("LINE_ITEM_EXTENSION_MATCH")
-    assert boat_chk is not None
-    assert boat_chk.status == ValidationStatus.FAIL
+    # 4. Questions: Targeted question for Boat Rockers 510
+    assert len(result.smart_questions) == 1
+    expected_q = "Could you please clarify how the ₹1,499 amount for Boat Rockers 510 is calculated from the displayed ₹2,499 MRP, ₹500 rate/item, and ₹500 discount?"
+    assert result.smart_questions[0].question == expected_q

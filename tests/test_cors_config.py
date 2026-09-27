@@ -3,8 +3,6 @@
 import os
 from unittest import mock
 
-import pytest
-
 from before_you_pay.config import Settings
 
 

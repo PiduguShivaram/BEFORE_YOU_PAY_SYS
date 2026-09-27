@@ -172,6 +172,11 @@ def verify_date_grounding(
 
     for line in all_lines:
         txt = line.text.lower()
+        if field_type == "issued_date" and "due" in txt:
+            continue
+        if field_type == "due_date" and any(k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]):
+            continue
+
         score = 0
         if y in line.text:
             score += 1
@@ -201,6 +206,12 @@ def verify_date_grounding(
 
     # Fallback to any line containing the year and day/month if specific keyword wasn't present
     for line in all_lines:
+        txt = line.text.lower()
+        if field_type == "issued_date" and "due" in txt:
+            continue
+        if field_type == "due_date" and any(k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]):
+            continue
+
         if y in line.text and (
             f"{d}-{m}" in line.text
             or f"{d}/{m}" in line.text
@@ -225,6 +236,11 @@ def fallback_extract_date(
 
     for line in all_lines:
         txt = line.text.lower()
+        if field_type == "issued_date" and "due" in txt:
+            continue
+        if field_type == "due_date" and any(k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]):
+            continue
+
         if any(k in txt for k in kws):
             norm = extract_date_from_text(line.text, default_dmy=default_dmy)
             if norm:

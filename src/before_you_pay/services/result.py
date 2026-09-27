@@ -1,5 +1,7 @@
 """Result compilation service producing evidence-backed decision payloads with visual bounding boxes."""
 
+from dataclasses import asdict
+
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -169,6 +171,50 @@ class ResultAggregatorService:
             ocr_quality=ocr_quality,
         )
 
+        # ── Phase 4: Extra Cost and Cost-Reduction Analysis ──
+        extra_cost_payload = None
+        eca_result = None
+        if document.cost_breakdown:
+            from before_you_pay.services.extra_cost_analysis import ExtraCostAnalysisService
+
+            eca_result = ExtraCostAnalysisService.analyze(list(document.cost_breakdown))
+            extra_cost_payload = {
+                "flagged_costs": [asdict(f) for f in eca_result.flagged_costs],
+                "total_potential_reduction": eca_result.total_potential_reduction,
+                "total_flagged_count": eca_result.total_flagged_count,
+                "total_charges_analyzed": eca_result.total_charges_analyzed,
+                "reduction_summary": eca_result.reduction_summary,
+            }
+
+        # ── Phase 5: Smart Cost-Reduction Questions ──
+        from before_you_pay.services.smart_questions import SmartCostReductionQuestionsService
+
+        smart_questions = SmartCostReductionQuestionsService.generate_questions(
+            cost_breakdown=list(document.cost_breakdown) if document.cost_breakdown else [],
+            extra_cost_analysis=eca_result,
+            validation_checks=validation_checks,
+            reasoning_claims=reasoning_claims,
+            document=document,
+        )
+
+        # ── Phase 7: Potential Cost Reduction Summary ──
+        cost_reduction_summary = None
+        if document.cost_breakdown:
+            from before_you_pay.services.cost_reduction import PotentialCostReductionService
+
+            cost_reduction_summary = PotentialCostReductionService.calculate_summary(
+                list(document.cost_breakdown)
+            )
+
+        # ── Phase 8: Plain-Language Financial Explanation ──
+        from before_you_pay.services.plain_language_explanation import PlainLanguageExplanationService
+
+        plain_language_explanation = PlainLanguageExplanationService.generate_explanation(
+            document=document,
+            validation_checks=validation_checks,
+            smart_questions=smart_questions,
+        )
+
         return FinalDecisionSupportResult(
             result_id=uuid4(),
             document_id=document_id,
@@ -178,6 +224,10 @@ class ResultAggregatorService:
             reasoning_claims=reasoning_claims,
             validation_checks=validation_checks,
             document=document,
+            extra_cost_analysis=extra_cost_payload,
+            smart_questions=smart_questions,
+            cost_reduction_summary=cost_reduction_summary,
+            plain_language_explanation=plain_language_explanation,
             raw_ocr_lines=raw_ocr_lines or [],
             ocr_lines=ocr_lines or [],
             analysis_state=analysis_state,
