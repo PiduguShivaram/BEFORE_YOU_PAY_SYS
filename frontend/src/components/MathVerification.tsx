@@ -184,29 +184,39 @@ export const MathVerification: React.FC<MathVerificationProps> = ({
   onSelectFieldId,
 }) => {
   const [expandedCheckId, setExpandedCheckId] = useState<string | null>(null);
+  const allPass = checks.length > 0 && checks.every((c) => c.status === "PASS");
+  const hasFail = checks.some((c) => c.status === "FAIL");
+  const [isSectionOpen, setIsSectionOpen] = useState<boolean>(hasFail);
 
   const toggleExpand = (id: string) => {
     setExpandedCheckId((prev) => (prev === id ? null : id));
   };
 
-  const allPass = checks.length > 0 && checks.every((c) => c.status === "PASS");
-  const hasFail = checks.some((c) => c.status === "FAIL");
-
   return (
-    <div className="glass-panel rounded-2xl p-4 sm:p-7 shadow-card mb-6 border border-white/10 space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-white/10">
+    <div className="surface-card rounded-2xl p-4 sm:p-6 shadow-card mb-6 border border-white/10 space-y-4">
+      {/* Header with Accordion Toggle */}
+      <button
+        type="button"
+        onClick={() => setIsSectionOpen(!isSectionOpen)}
+        className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-white/10 text-left cursor-pointer hover:opacity-90 transition rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+        aria-expanded={isSectionOpen}
+      >
         <div className="flex items-center gap-2.5">
           <Calculator className="w-5 h-5 text-brand-400 shrink-0" />
           <div>
-            <h3 className="font-bold text-base text-white">Arithmetic Verification</h3>
+            <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
+              <span>Technical Verification Details</span>
+              <span className="text-[11px] font-mono text-slate-400 font-normal">
+                ({checks.length} code checks)
+              </span>
+            </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Deterministic code checks all calculations without relying on AI guesswork
+              Deterministic formula proofs and tolerance checks executed on extracted values
             </p>
           </div>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-center">
           {hasFail ? (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
               <AlertCircle className="w-3.5 h-3.5" />
@@ -223,11 +233,20 @@ export const MathVerification: React.FC<MathVerificationProps> = ({
               Verification Needed
             </span>
           )}
-        </div>
-      </div>
 
-      {/* Verification Checks List (Mobile Stacked Layout) */}
-      <div className="flex flex-col gap-2.5">
+          <span className="text-slate-400 hover:text-white p-1">
+            {isSectionOpen ? (
+              <ChevronDown className="w-4 h-4 text-slate-400 rotate-180 transition-transform" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-400 transition-transform" />
+            )}
+          </span>
+        </div>
+      </button>
+
+      {/* Verification Checks List (Collapsible) */}
+      {isSectionOpen && (
+        <div className="flex flex-col gap-2.5 animate-in fade-in duration-200">
         {checks.map((check) => {
           const isPass = check.status === "PASS";
           const isFail = check.status === "FAIL";
@@ -457,7 +476,8 @@ export const MathVerification: React.FC<MathVerificationProps> = ({
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

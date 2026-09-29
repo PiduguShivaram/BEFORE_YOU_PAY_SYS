@@ -1,4 +1,6 @@
-"""Lightweight, zero-dependency User Document RAG service using standard SQLite."""
+"""Deterministic SQLite-based token-overlap document retrieval with tenant isolation.
+The current retrieval system is lexical/token-overlap based and does not use neural semantic/vector embeddings.
+"""
 
 import sqlite3
 import sys
@@ -30,7 +32,11 @@ def _resolve_db_path() -> str:
 
 
 class SqliteRagService:
-    """User Document RAG store utilizing SQLite with strict user_id tenant isolation."""
+    """Deterministic SQLite-based token-overlap document retrieval with tenant isolation.
+
+    The current retrieval system is lexical/token-overlap based and does not use
+    neural semantic/vector embeddings.
+    """
 
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path if db_path is not None else _resolve_db_path()
@@ -41,12 +47,16 @@ class SqliteRagService:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_db(self) -> None:
         with self._get_connection() as conn:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_chunks (
@@ -64,6 +74,9 @@ class SqliteRagService:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_user_chunks_user ON user_chunks (user_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_chunks_user_doc ON user_chunks (user_id, source_document_id)"
+            )
             conn.commit()
 
     async def index_document_chunks(

@@ -29,6 +29,7 @@ export const viewport: Viewport = {
   themeColor: "#070b14",
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -38,10 +39,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`dark overflow-x-hidden ${plusJakarta.variable} ${jetbrainsMono.variable}`}>
-      <body className="antialiased selection:bg-brand-500/30 selection:text-brand-100 font-sans overflow-x-hidden w-full max-w-full">
-        {/* Ambient Top Glow */}
-        <div className="fixed top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[750px] max-w-[100vw] h-[450px] bg-gradient-to-b from-brand-500/15 via-sky-500/5 to-transparent rounded-full blur-3xl pointer-events-none z-0" />
-        <div className="relative z-10 w-full overflow-x-hidden">{children}</div>
+      <body className="antialiased selection:bg-brand-500/30 selection:text-brand-100 font-sans overflow-x-hidden w-full max-w-full bg-[#070b14] text-slate-100">
+        <div className="relative w-full overflow-x-hidden">{children}</div>
       </body>
     </html>
   );

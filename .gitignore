@@ -33,4 +33,6 @@ scratch/
 
 # Scratch & test outputs
 response.json
+agents/
+*.tsbuildinfo
 

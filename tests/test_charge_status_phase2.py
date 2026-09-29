@@ -32,20 +32,19 @@ Verifies:
 """
 
 from uuid import uuid4
+
 import pytest
 
 from before_you_pay.models.document import (
+    CHARGE_STATUS_DISPLAY_LABELS,
     BoundingBox,
-    ChargeNature,
     ChargeStatus,
     ComponentCategory,
     ExtractedField,
     FieldProvenance,
     FinancialComponent,
-    CHARGE_STATUS_DISPLAY_LABELS,
 )
 from before_you_pay.services.charge_status import (
-    ChargeStatusAssessment,
     ChargeStatusClassifier,
 )
 
@@ -283,8 +282,14 @@ class TestPhase2PhrasingSafetyAndGuardrails:
         'Mandatory by law' from 'Required by seller/contract' from 'Potentially optional' from 'Unknown'
         """
         assert CHARGE_STATUS_DISPLAY_LABELS[ChargeStatus.MANDATORY_STATUTORY] == "Mandatory by law"
-        assert CHARGE_STATUS_DISPLAY_LABELS[ChargeStatus.CONTRACTUAL_REQUIREMENT] == "Required by seller/contract"
-        assert CHARGE_STATUS_DISPLAY_LABELS[ChargeStatus.POTENTIALLY_OPTIONAL] == "Potentially optional"
+        assert (
+            CHARGE_STATUS_DISPLAY_LABELS[ChargeStatus.CONTRACTUAL_REQUIREMENT]
+            == "Required by seller/contract"
+        )
+        assert (
+            CHARGE_STATUS_DISPLAY_LABELS[ChargeStatus.POTENTIALLY_OPTIONAL]
+            == "Potentially optional"
+        )
         assert CHARGE_STATUS_DISPLAY_LABELS[ChargeStatus.UNKNOWN] == "Unknown"
 
         # Ensure all distinct

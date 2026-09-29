@@ -9,8 +9,12 @@
     "build": "npm run build --prefix frontend",
     "start": "npm run start --prefix frontend",
     "lint": "npm run lint --prefix frontend",
-    "test": "uv run pytest"
+    "test": "uv run pytest",
+    "vercel-build": "npm run build --prefix frontend"
   },
+  "workspaces": [
+    "frontend"
+  ],
   "devDependencies": {
     "concurrently": "^10.0.5"
   }

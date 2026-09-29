@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from before_you_pay.core.dates import fallback_extract_date
 from before_you_pay.core.errors import ContractViolationException
 from before_you_pay.models import (
+    AmountState,
     ChargeNature,
     ComponentCategory,
     DocumentClassification,
@@ -63,6 +64,32 @@ TABLE_HEADER_PATTERN = re.compile(
     r"\b(items?|description|particulars)\b.*\b(hsn|sac|qty|mrp|rate|price|amount)\b",
     re.IGNORECASE,
 )
+
+
+def is_table_header_line(text: str) -> bool:
+    """Check if a line represents a tabular column header, not a product data row."""
+    # Reject lines containing monetary values or assignments e.g. "Rate/Item: $100" or "MRP = 17,999"
+    if re.search(r"[:=]\s*(?:[₹$€£¥]|Rs\.?|INR|USD)?\s*[0-9]", text, re.IGNORECASE):
+        return False
+    if re.search(r"(?:[₹$€£¥]|Rs\.?|INR|USD)\s*[0-9]", text, re.IGNORECASE):
+        return False
+    if re.search(r"\b[0-9]+(?:\.[0-9]{2})\b", text):
+        return False
+    return bool(TABLE_HEADER_PATTERN.search(text))
+
+
+def is_inline_labeled_product_line(text: str) -> bool:
+    """Check if line is an item row with inline fields (e.g. 'Item Rate/Item: $X Discount: Y% Final line amount: $Z')."""
+    text_clean = text.strip()
+    if re.search(
+        r"\b(?:Rate(?:/Item)?|Unit\s*Price|MRP|Final\s*line\s*amount)\b\s*[:=]",
+        text_clean,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
 TAX_IDENTIFIER_PATTERN = re.compile(
     r"\b(vat\s*no\.?|vat\s*number|gstin|tin\b|tax\s*id|registration\s*no\.?)\b",
     re.IGNORECASE,
@@ -89,11 +116,13 @@ def _is_metadata_line(text: str) -> bool:
     text_lower = text_stripped.lower()
     if not text_stripped:
         return True
+    if is_inline_labeled_product_line(text_stripped):
+        return False
     # Short lines with only a number (e.g. page numbers)
     if re.fullmatch(r"\d{1,6}", text_stripped):
         return True
     # Table header line (all header columns, no data)
-    if re.search(r"\bitems?\s+hsn\b", text_lower) or TABLE_HEADER_PATTERN.search(text_lower):
+    if re.search(r"\bitems?\s+hsn\b", text_lower) or is_table_header_line(text_stripped):
         return True
     # Tax / registration identifiers
     if TAX_IDENTIFIER_PATTERN.search(text_lower):
@@ -232,8 +261,7 @@ class FinancialExtractionEngine:
         table_header_idx = -1
         table_footer_idx = len(all_lines)
         for idx, line in enumerate(all_lines):
-            t_low = line.text.lower()
-            if TABLE_HEADER_PATTERN.search(t_low):
+            if is_table_header_line(line.text):
                 table_header_idx = idx
                 break
 
@@ -305,8 +333,10 @@ class FinancialExtractionEngine:
                     continue
 
             # 3. Total line check
-            if TOTAL_LABEL_PATTERN.search(text_lower) and not SUBTOTAL_LABEL_PATTERN.search(
-                text_lower
+            if (
+                not is_inline_labeled_product_line(line.text)
+                and TOTAL_LABEL_PATTERN.search(text_lower)
+                and not SUBTOTAL_LABEL_PATTERN.search(text_lower)
             ):
                 amount = self._parse_amount(line.text)
                 if amount is not None and (
@@ -329,7 +359,9 @@ class FinancialExtractionEngine:
                     continue
 
             # 4. Subtotal / Taxable amount check
-            if SUBTOTAL_LABEL_PATTERN.search(text_lower):
+            if not is_inline_labeled_product_line(line.text) and SUBTOTAL_LABEL_PATTERN.search(
+                text_lower
+            ):
                 amount = self._parse_amount(line.text)
                 if amount is not None:
                     subtotal_field = ExtractedField(
@@ -369,8 +401,10 @@ class FinancialExtractionEngine:
                     continue
 
             # 6. Document-level discount check
-            if DISCOUNT_LABEL_PATTERN.search(text_lower) and not any(
-                k in text_lower for k in ["rate", "mrp", "item"]
+            if (
+                not is_inline_labeled_product_line(line.text)
+                and DISCOUNT_LABEL_PATTERN.search(text_lower)
+                and not any(k in text_lower for k in ["rate", "mrp", "item"])
             ):
                 amount = self._parse_amount(line.text)
                 if amount is not None:
@@ -391,7 +425,9 @@ class FinancialExtractionEngine:
                     continue
 
             # 7. Tax line check
-            if TAX_LABEL_PATTERN.search(text_lower) and not TAX_IDENTIFIER_PATTERN.search(text_lower):
+            if TAX_LABEL_PATTERN.search(text_lower) and not TAX_IDENTIFIER_PATTERN.search(
+                text_lower
+            ):
                 amount = self._parse_amount(line.text)
                 if amount is not None:
                     tax_ext = ExtractedField(
@@ -459,21 +495,38 @@ class FinancialExtractionEngine:
                 continue
 
             # 9b. Financial component check (quotations, cost breakdowns, fee schedules)
-            comp_cat, comp_norm_name, comp_nature, comp_opt, comp_exp = classify_component_name(line.text)
-            is_quote_doc = detected_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
+            comp_cat, comp_norm_name, comp_nature, comp_opt, comp_exp = classify_component_name(
+                line.text
+            )
+            is_quote_doc = detected_type in (
+                DocumentClassification.QUOTATION,
+                DocumentClassification.COST_BREAKDOWN,
+            )
             is_distinct_quote_charge = comp_cat in (
                 ComponentCategory.EX_SHOWROOM_PRICE,
+                ComponentCategory.BASE_PRICE,
                 ComponentCategory.ROAD_TAX,
                 ComponentCategory.RC,
                 ComponentCategory.HSRP,
                 ComponentCategory.FASTAG,
+                ComponentCategory.INSURANCE,
                 ComponentCategory.EXTENDED_WARRANTY,
+                ComponentCategory.WARRANTY,
                 ComponentCategory.ACCESSORY_PACKAGE,
+                ComponentCategory.ACCESSORY,
                 ComponentCategory.HANDLING_FEE,
                 ComponentCategory.LOGISTICS_FEE,
                 ComponentCategory.PROCESSING_FEE,
                 ComponentCategory.DEALER_PACKAGE,
                 ComponentCategory.SERVICE_PACKAGE,
+                ComponentCategory.SERVICE,
+                ComponentCategory.FINANCING,
+                ComponentCategory.OFFER,
+                ComponentCategory.DISCOUNT,
+                ComponentCategory.TAX_OR_STATUTORY,
+                ComponentCategory.TAX,
+                ComponentCategory.TCS,
+                ComponentCategory.GST,
             )
             if (is_quote_doc or is_distinct_quote_charge) and comp_cat not in (
                 ComponentCategory.TOTAL,
@@ -487,7 +540,27 @@ class FinancialExtractionEngine:
                     pass
                 else:
                     amount = self._parse_amount(line.text)
-                    if amount is not None and amount > 0:
+                    amt_state = None
+                    text_lower_comp = line.text.lower()
+
+                    if amount is not None:
+                        amt_state = AmountState.ZERO if amount == 0.0 else AmountState.PRESENT
+                    elif any(
+                        k in text_lower_comp for k in ["free", "included", "foc", "nil", "zero"]
+                    ):
+                        amount = 0.0
+                        amt_state = AmountState.ZERO
+                    elif any(k in text_lower_comp for k in ["tbd", "pending", "to be decided"]):
+                        amt_state = AmountState.MISSING
+                    elif "unreadable" in text_lower_comp:
+                        amt_state = AmountState.UNREADABLE
+                    elif "unknown" in text_lower_comp:
+                        amt_state = AmountState.UNKNOWN
+                    elif any(k in text_lower_comp for k in ["n/a", "not applicable", "na"]):
+                        amt_state = AmountState.NOT_APPLICABLE
+
+                    if amount is not None or amt_state is not None:
+                        final_amt_state = amt_state or AmountState.PRESENT
                         cleaned_name = clean_component_text(line.text)
                         comp_amt_field = ExtractedField(
                             field_id=uuid4(),
@@ -495,6 +568,7 @@ class FinancialExtractionEngine:
                             normalized_value=amount,
                             unit_or_currency=line_curr,
                             confidence=(line.confidence or 0.85),
+                            amount_state=final_amt_state,
                             provenance=FieldProvenance(
                                 document_id=document_id,
                                 page_id=line.page_id,
@@ -514,6 +588,7 @@ class FinancialExtractionEngine:
                                 normalized_name=comp_norm_name,
                                 normalized_label=norm_label or comp_norm_name,
                                 amount=comp_amt_field,
+                                amount_state=final_amt_state,
                                 category=comp_cat,
                                 vehicle_category=comp_cat.to_vehicle_category(),
                                 charge_nature=comp_nature,
@@ -526,7 +601,10 @@ class FinancialExtractionEngine:
                                 explanation=comp_exp,
                             )
                         )
-                        if detected_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN):
+                        if detected_type in (
+                            DocumentClassification.QUOTATION,
+                            DocumentClassification.COST_BREAKDOWN,
+                        ):
                             continue
 
             # 10. Candidate itemized line item (only if no structured table was found)
@@ -540,7 +618,9 @@ class FinancialExtractionEngine:
 
         # Fallback or aggregate tax_amount if individual tax components were itemized
         if taxes:
-            has_explicit_total = any("total" in (t.provenance.raw_text or "").lower() for t in taxes)
+            has_explicit_total = any(
+                "total" in (t.provenance.raw_text or "").lower() for t in taxes
+            )
             if not has_explicit_total or tax_field is None:
                 sum_tax = round(sum(float(t.normalized_value) for t in taxes), 2)
                 first_t = taxes[0]
@@ -564,10 +644,70 @@ class FinancialExtractionEngine:
                 total_discount=disc_amt_val,
             )
 
-        # Fallback subtotal from cost_breakdown if missing
-        if subtotal_field is None and cost_breakdown:
-            charges_sum = round(sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.CHARGE), 2)
-            if charges_sum > 0:
+        # Check if an unclear/unlabeled trailing item in cost_breakdown is actually the net total
+        # of the preceding charges minus deductions (or equals sum of preceding charges)
+        if len(cost_breakdown) >= 2:
+            last_c = cost_breakdown[-1]
+            if last_c.category in (
+                ComponentCategory.UNCLEAR,
+                ComponentCategory.UNKNOWN,
+                ComponentCategory.OTHER,
+                ComponentCategory.TOTAL,
+            ):
+                other_charges = [
+                    c
+                    for c in cost_breakdown[:-1]
+                    if getattr(
+                        c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
+                    )
+                ]
+                other_deductions = [
+                    c
+                    for c in cost_breakdown[:-1]
+                    if getattr(
+                        c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                    )
+                ]
+                c_sum = round(
+                    sum(float(c.amount.normalized_value or 0.0) for c in other_charges), 2
+                )
+                d_sum = round(
+                    sum(float(c.amount.normalized_value or 0.0) for c in other_deductions), 2
+                )
+                net_calc = round(c_sum - d_sum, 2)
+                last_amt = float(last_c.amount.normalized_value or 0.0)
+                if (c_sum > 0 and abs(last_amt - net_calc) < 1.0) or (
+                    d_sum == 0 and abs(last_amt - c_sum) < 1.0
+                ):
+                    cost_breakdown.pop()
+
+        # Fallback subtotal from cost_breakdown if missing or for quotations
+        if cost_breakdown:
+            charges_sum = round(
+                sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
+                    )
+                ),
+                2,
+            )
+            deductions_sum = round(
+                sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                    )
+                ),
+                2,
+            )
+            if subtotal_field is None or (
+                detected_type
+                in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
+                and charges_sum > 0
+            ):
                 first_c = cost_breakdown[0]
                 subtotal_field = ExtractedField(
                     field_id=uuid4(),
@@ -579,18 +719,87 @@ class FinancialExtractionEngine:
                 )
 
         # Fallback discount_amount from cost_breakdown if missing
-        if discount_field is None and cost_breakdown:
-            deductions_sum = round(sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION), 2)
-            if deductions_sum > 0:
-                first_d = [c for c in cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION][0]
-                discount_field = ExtractedField(
-                    field_id=uuid4(),
-                    field_key="discount_amount",
-                    normalized_value=deductions_sum,
-                    unit_or_currency=doc_currency,
-                    confidence=first_d.amount.confidence,
-                    provenance=first_d.amount.provenance,
-                )
+        if cost_breakdown:
+            deductions_sum = round(
+                sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                    )
+                ),
+                2,
+            )
+            if discount_field is None or (
+                detected_type
+                in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
+                and deductions_sum > 0
+            ):
+                ded_items = [
+                    c
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                    )
+                ]
+                if ded_items:
+                    first_d = ded_items[0]
+                    discount_field = ExtractedField(
+                        field_id=uuid4(),
+                        field_key="discount_amount",
+                        normalized_value=deductions_sum,
+                        unit_or_currency=doc_currency,
+                        confidence=first_d.amount.confidence,
+                        provenance=first_d.amount.provenance,
+                    )
+
+        # Quotation net total amount reconciliation
+        if cost_breakdown and detected_type in (
+            DocumentClassification.QUOTATION,
+            DocumentClassification.COST_BREAKDOWN,
+        ):
+            charges_sum = round(
+                sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
+                    )
+                ),
+                2,
+            )
+            deductions_sum = round(
+                sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                    )
+                ),
+                2,
+            )
+            net_quote = round(charges_sum - deductions_sum, 2)
+            net_line = None
+            for ln in reversed(all_lines):
+                amt = self._parse_amount(ln.text)
+                if amt is not None and abs(amt - net_quote) < 1.0:
+                    net_line = ln
+                    break
+            last_line = net_line or (all_lines[-1] if all_lines else ocr_result.pages[0].lines[0])
+            total_field = ExtractedField(
+                field_id=uuid4(),
+                field_key="total_amount",
+                normalized_value=net_quote,
+                unit_or_currency=doc_currency,
+                confidence=(last_line.confidence or 0.85),
+                provenance=FieldProvenance(
+                    document_id=document_id,
+                    page_id=last_line.page_id,
+                    ocr_line_ids=[last_line.line_id],
+                    bounding_box=last_line.bounding_box,
+                    raw_text=last_line.text,
+                ),
+            )
 
         # Fallback total if no explicit total label was matched
         if total_field is None:
@@ -606,8 +815,20 @@ class FinancialExtractionEngine:
                     provenance=balance_due_field.provenance,
                 )
             elif cost_breakdown:
-                charges_sum = sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.CHARGE)
-                deductions_sum = sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION)
+                charges_sum = sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
+                    )
+                )
+                deductions_sum = sum(
+                    float(c.amount.normalized_value or 0.0)
+                    for c in cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                    )
+                )
                 computed_sum = round(charges_sum - deductions_sum, 2)
                 first_line = all_lines[-1] if all_lines else ocr_result.pages[0].lines[0]
                 total_field = ExtractedField(
@@ -775,19 +996,41 @@ class FinancialExtractionEngine:
         if hint != DocumentClassification.OTHER:
             return hint
 
-        full_text = " ".join([ln.text.lower() for ln in lines[:10]])
-        if "quotation" in full_text or "estimate" in full_text:
+        all_text = " ".join([ln.text.lower() for ln in lines])
+        if any(k in all_text for k in ["quotation", "estimate", "quote"]):
             return DocumentClassification.QUOTATION
-        if "invoice" in full_text:
+        if "invoice" in all_text:
             return DocumentClassification.INVOICE
-        if "warranty" in full_text or "coverage" in full_text:
+        if "warranty" in all_text or "coverage" in all_text:
             return DocumentClassification.WARRANTY
-        if "subscription" in full_text or "recurring" in full_text:
+        if "subscription" in all_text or "recurring" in all_text:
             return DocumentClassification.SUBSCRIPTION
-        if "contract" in full_text or "agreement" in full_text:
+        if "contract" in all_text or "agreement" in all_text:
             return DocumentClassification.CONTRACT
-        if "bill" in full_text:
+        if "bill" in all_text:
             return DocumentClassification.BILL
+
+        # Characteristic vehicle quotation / cost breakdown signals:
+        # e.g., ex-showroom/exshorum price, on-road price, R.C. / road tax, TCS, HSRP, dealer offers
+        vehicle_quote_signals = [
+            r"\bex[\s\.\-_]*sho?w?ru?o?m\b",
+            r"\bon[\s\.\-_]*road\b",
+            r"\br[\s\.]*c\b(?:\s*=\s*\d+|\s*charges?)",
+            r"\bt[\s\.]*c[\s\.]*s\b",
+            r"\b(?:tem\+)?hsrp\b",
+            r"\broad\s*tax\b",
+        ]
+        matches_count = sum(
+            1 for p in vehicle_quote_signals if re.search(p, all_text, re.IGNORECASE)
+        )
+        if matches_count >= 1 and any(
+            k in all_text
+            for k in ["exshorum", "exshowroom", "ex-showroom", "ex showroom", "on-road", "on road"]
+        ):
+            return DocumentClassification.QUOTATION
+        if matches_count >= 2:
+            return DocumentClassification.QUOTATION
+
         return DocumentClassification.OTHER
 
     def _extract_vendor(self, document_id: UUID, ocr_result: OcrResult) -> ExtractedField | None:
@@ -812,41 +1055,116 @@ class FinancialExtractionEngine:
             "order",
         }
 
-        for line in ocr_result.pages[0].lines[:10]:
+        candidates = []
+        for line in ocr_result.pages[0].lines[:15]:
             clean_text = line.text.strip().rstrip(" ,;:-")
+            if is_inline_labeled_product_line(clean_text):
+                continue
             if len(clean_text) < 2 or clean_text.lower() in generic_headings:
                 continue
             if re.match(r"^(invoice|quote|bill|date|total|page|statement)\b", clean_text.lower()):
                 continue
-            if any(k in clean_text.lower() for k in ["address:", "phone:", "mobile:", "website:", "www.", "street", "road", "colony", "place of supply"]):
+            if any(
+                k in clean_text.lower()
+                for k in [
+                    "address:",
+                    "phone:",
+                    "mobile:",
+                    "website:",
+                    "www.",
+                    "street",
+                    "road",
+                    "colony",
+                    "place of supply",
+                ]
+            ):
                 continue
             # Clean trailing OCR artifacts: duplicated logo/brand fragments and non-alphanumeric garbage
-            # e.g. "Zetran Technologies Pvt., Ltd., zetran ☐" → "Zetran Technologies Pvt., Ltd."
+            # e.g. "Acme Technologies Pvt., Ltd., acme ☐" → "Acme Technologies Pvt., Ltd."
             # Remove trailing comma + lowercase fragment that repeats a word already in the name
-            words_lower = set(w.lower() for w in re.findall(r'[a-zA-Z]{2,}', clean_text))
-            trailing_m = re.search(r',\s+([a-z]+(?:\s+[a-z]+)?)\s*[^\w,]*\s*$', clean_text)
+            words_lower = set(w.lower() for w in re.findall(r"[a-zA-Z]{2,}", clean_text))
+            trailing_m = re.search(r",\s+([a-z]+(?:\s+[a-z]+)?)\s*[^\w,]*\s*$", clean_text)
             if trailing_m:
                 trailing_word = trailing_m.group(1).lower().split()[0]
                 if trailing_word in words_lower:
-                    clean_text = clean_text[:trailing_m.start()].rstrip(' ,;:-')
+                    clean_text = clean_text[: trailing_m.start()].rstrip(" ,;:-")
             # Strip trailing non-alphanumeric garbage (unicode boxes, stray symbols)
-            clean_text = re.sub(r'[^\w.,&\'"()\-/]+\s*$', '', clean_text).rstrip(' ,;:-')
+            clean_text = re.sub(r'[^\w.,&\'"()\-/]+\s*$', "", clean_text).rstrip(" ,;:-")
+            if len(clean_text) >= 2:
+                candidates.append((clean_text, line))
 
-            return ExtractedField(
-                field_id=uuid4(),
-                field_key="vendor_name",
-                normalized_value=clean_text,
-                unit_or_currency=None,
-                confidence=(line.confidence or 0.85),
-                provenance=FieldProvenance(
-                    document_id=document_id,
-                    page_id=line.page_id,
-                    ocr_line_ids=[line.line_id],
-                    bounding_box=line.bounding_box,
-                    raw_text=line.text,
-                ),
-            )
-        return None
+        if not candidates:
+            return None
+
+        # Prioritize candidates with company entity markers over single lowercase words
+        company_indicators = [
+            "pvt",
+            "ltd",
+            "inc",
+            "corp",
+            "llc",
+            "gmbh",
+            "technologies",
+            "enterprises",
+            "services",
+            "solutions",
+            "motors",
+            "automobiles",
+            "limited",
+            "company",
+            "co.",
+        ]
+        for c_text, c_line in candidates:
+            c_lower = c_text.lower()
+            if any(ci in c_lower for ci in company_indicators):
+                return ExtractedField(
+                    field_id=uuid4(),
+                    field_key="vendor_name",
+                    normalized_value=c_text,
+                    unit_or_currency=None,
+                    confidence=(c_line.confidence or 0.85),
+                    provenance=FieldProvenance(
+                        document_id=document_id,
+                        page_id=c_line.page_id,
+                        ocr_line_ids=[c_line.line_id],
+                        bounding_box=c_line.bounding_box,
+                        raw_text=c_line.text,
+                    ),
+                )
+
+        # Fallback to the first candidate that is not an all-lowercase single word if possible
+        for c_text, c_line in candidates:
+            if not (c_text.islower() and " " not in c_text):
+                return ExtractedField(
+                    field_id=uuid4(),
+                    field_key="vendor_name",
+                    normalized_value=c_text,
+                    unit_or_currency=None,
+                    confidence=(c_line.confidence or 0.85),
+                    provenance=FieldProvenance(
+                        document_id=document_id,
+                        page_id=c_line.page_id,
+                        ocr_line_ids=[c_line.line_id],
+                        bounding_box=c_line.bounding_box,
+                        raw_text=c_line.text,
+                    ),
+                )
+
+        best_text, best_line = candidates[0]
+        return ExtractedField(
+            field_id=uuid4(),
+            field_key="vendor_name",
+            normalized_value=best_text,
+            unit_or_currency=None,
+            confidence=(best_line.confidence or 0.85),
+            provenance=FieldProvenance(
+                document_id=document_id,
+                page_id=best_line.page_id,
+                ocr_line_ids=[best_line.line_id],
+                bounding_box=best_line.bounding_box,
+                raw_text=best_line.text,
+            ),
+        )
 
     def _extract_date(self, document_id: UUID, lines: list[OcrLine]) -> ExtractedField | None:
         """Search for date pattern across top lines and normalize to ISO YYYY-MM-DD."""
@@ -1082,36 +1400,6 @@ class FinancialExtractionEngine:
         return None
 
     def _extract_line_items(
-        self, document_id: UUID, lines: list[OcrLine], currency: str | None
-    ) -> list[LineItem]:
-        """Extract itemized line items when LLM does not return any."""
-        items: list[LineItem] = []
-        for line in lines:
-            text_lower = line.text.lower()
-            if any(
-                p.search(text_lower)
-                for p in [
-                    TOTAL_LABEL_PATTERN,
-                    SUBTOTAL_LABEL_PATTERN,
-                    TAX_LABEL_PATTERN,
-                    SHIPPING_LABEL_PATTERN,
-                    FEE_LABEL_PATTERN,
-                    DISCOUNT_LABEL_PATTERN,
-                    PAID_LABEL_PATTERN,
-                    BALANCE_LABEL_PATTERN,
-                ]
-            ):
-                continue
-            # Skip document metadata lines (invoice numbers, dates, page refs)
-            if _is_metadata_line(line.text):
-                continue
-            amt = self._parse_amount(line.text)
-            if amt is not None and amt > 0:
-                item = self._build_line_item(document_id, line, amt, currency)
-                items.append(item)
-        return items
-
-    def _extract_line_items(
         self,
         document_id: UUID,
         lines: list[OcrLine],
@@ -1122,8 +1410,7 @@ class FinancialExtractionEngine:
         table_header_idx = -1
         table_footer_idx = len(lines)
         for idx, line in enumerate(lines):
-            t_low = line.text.lower()
-            if TABLE_HEADER_PATTERN.search(t_low):
+            if is_table_header_line(line.text):
                 table_header_idx = idx
                 break
 
@@ -1154,20 +1441,22 @@ class FinancialExtractionEngine:
         items: list[LineItem] = []
         for line in lines:
             text_lower = line.text.lower()
-            if any(
-                p.search(text_lower)
-                for p in [
-                    TOTAL_LABEL_PATTERN,
-                    SUBTOTAL_LABEL_PATTERN,
-                    TAX_LABEL_PATTERN,
-                    SHIPPING_LABEL_PATTERN,
-                    FEE_LABEL_PATTERN,
-                    DISCOUNT_LABEL_PATTERN,
-                    PAID_LABEL_PATTERN,
-                    BALANCE_LABEL_PATTERN,
-                ]
-            ):
-                continue
+            is_inline_item = is_inline_labeled_product_line(line.text)
+            if not is_inline_item:
+                if any(
+                    p.search(text_lower)
+                    for p in [
+                        TOTAL_LABEL_PATTERN,
+                        SUBTOTAL_LABEL_PATTERN,
+                        TAX_LABEL_PATTERN,
+                        SHIPPING_LABEL_PATTERN,
+                        FEE_LABEL_PATTERN,
+                        DISCOUNT_LABEL_PATTERN,
+                        PAID_LABEL_PATTERN,
+                        BALANCE_LABEL_PATTERN,
+                    ]
+                ):
+                    continue
             # Skip document metadata lines (invoice numbers, dates, page refs, addresses)
             if _is_metadata_line(line.text):
                 continue
@@ -1223,15 +1512,15 @@ class FinancialExtractionEngine:
             # 2. Match product row: find HSN code and extract description + numeric columns
             # Flexible approach: identify the 4-8 digit HSN, text before it is description,
             # then parse all numbers from the remainder regardless of OCR noise
-            hsn_match = re.search(r'\b(\d{4,8})\b', txt)
+            hsn_match = re.search(r"\b(\d{4,8})\b", txt)
             if hsn_match and not _is_metadata_line(txt):
-                desc = txt[:hsn_match.start()].strip()
-                after_hsn = txt[hsn_match.end():]
+                desc = txt[: hsn_match.start()].strip()
+                after_hsn = txt[hsn_match.end() :]
                 hsn = hsn_match.group(1)
 
                 # Clean OCR artifacts from numeric section: 'e' (misread ₹/1), '*' (bullet)
-                after_clean = re.sub(r'\be\b', '', after_hsn)
-                after_clean = after_clean.replace('*', '')
+                after_clean = re.sub(r"\be\b", "", after_hsn)
+                after_clean = after_clean.replace("*", "")
                 nums = [float(x.replace(",", "")) for x in num_pattern.findall(after_clean)]
 
                 # Need at least 1 number (the amount) to consider this a valid row
@@ -1245,10 +1534,28 @@ class FinancialExtractionEngine:
                     qty_val = 1.0
 
                     if len(nums) >= 5:
-                        # qty, mrp, rate/disc, tax, amount  OR  mrp, rate, disc, tax, amount
-                        mrp, rate, disc, tax, amt = nums[-5], nums[-4], nums[-3], nums[-2], nums[-1]
                         if len(nums) >= 6:
                             qty_val = nums[0]
+                            mrp, rate, disc, tax, amt = (
+                                nums[-5],
+                                nums[-4],
+                                nums[-3],
+                                nums[-2],
+                                nums[-1],
+                            )
+                        elif nums[0] <= 10 and nums[1] > 20:
+                            # Row format: [qty, mrp, disc, tax, amt]
+                            qty_val = nums[0]
+                            mrp, disc, tax, amt = nums[1], nums[2], nums[3], nums[4]
+                            rate = round(amt + (disc or 0.0), 2)
+                        else:
+                            mrp, rate, disc, tax, amt = (
+                                nums[-5],
+                                nums[-4],
+                                nums[-3],
+                                nums[-2],
+                                nums[-1],
+                            )
                     elif len(nums) == 4:
                         # 4 numbers: likely [MRP, rate_or_disc, tax, amount] or [disc, tax, amount, ?]
                         if nums[-2] == 0.0:
@@ -1272,6 +1579,7 @@ class FinancialExtractionEngine:
                         # Common: disc, tax, amount  or  rate, tax, amount
                         if nums[-2] == 0.0:
                             disc, tax, amt = nums[-3], nums[-2], nums[-1]
+                            rate = round(amt + disc, 2)
                         else:
                             rate, tax, amt = nums[-3], nums[-2], nums[-1]
                     elif len(nums) == 2:
@@ -1294,6 +1602,12 @@ class FinancialExtractionEngine:
 
             # Fallback for table lines without a recognizable HSN code
             if not _is_metadata_line(txt):
+                if is_inline_labeled_product_line(txt):
+                    amt = self._parse_amount(txt)
+                    if amt is not None and amt > 0:
+                        inline_item = self._build_line_item(document_id, line, amt, currency)
+                        items.append(inline_item)
+                        continue
                 amt = self._parse_amount(txt)
                 if amt is not None and amt > 0:
                     cleaned_desc = re.sub(
@@ -1322,6 +1636,18 @@ class FinancialExtractionEngine:
             missing = [it for it in pending_items_data if it.get("discount") is None]
             if len(missing) == 1 and total_discount > known_disc:
                 missing[0]["discount"] = round(total_discount - known_disc, 2)
+
+        # Ensure rate and MRP are populated where supported by document table columns
+        for it in pending_items_data:
+            if it.get("rate") is None and it.get("amount") is not None:
+                it["rate"] = round(it["amount"] + (it.get("discount") or 0.0), 2)
+            if (
+                it.get("mrp") is None
+                and it.get("rate") is not None
+                and it.get("discount") is not None
+                and it["discount"] > 0
+            ):
+                it["mrp"] = round(it["rate"] + it["discount"], 2)
 
         # Build LineItem objects
         for it in pending_items_data:
@@ -1483,9 +1809,9 @@ class FinancialExtractionEngine:
     def _parse_amount(self, text: str) -> float | None:
         """Extract numeric amount from text line, preserving integers, decimals, and Indian numbering."""
         text_clean = text.strip()
-        # Pre-clean OCR noise: double periods ("29,497..0" → "29,497.0"), stray '*' before digits
-        text_clean = re.sub(r'\.{2,}', '.', text_clean)
-        text_clean = re.sub(r'\*(\d)', r'\1', text_clean)
+        # Pre-clean OCR noise: double periods ("25,000..0" → "25,000.0"), stray '*' before digits
+        text_clean = re.sub(r"\.{2,}", ".", text_clean)
+        text_clean = re.sub(r"\*(\d)", r"\1", text_clean)
         text_lower = text_clean.lower()
 
         # Reject pure percentage or token ending with %
@@ -1544,7 +1870,7 @@ class FinancialExtractionEngine:
             except ValueError:
                 pass
 
-        # 2. Look for assignment or colon: e.g. "= 499" or ": 499" or "= 29,497" or "₹11,49,900/-"
+        # 2. Look for assignment or colon: e.g. "= 499" or ": 499" or "= 25,000" or "₹11,49,900/-"
         assign_pattern = re.compile(
             r"[:=]\s*(?:[₹$€£¥]|Rs\.?|INR|USD)?\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)(?:\s*\/\s*[-–—]?)?\s*$",
             re.IGNORECASE,
@@ -1585,17 +1911,15 @@ class FinancialExtractionEngine:
         item_curr = detect_currency(text) or currency
 
         # Extract item name
-        if ":" in text and any(
-            k in text.lower() for k in ["mrp", "rate", "discount", "amount", "price"]
-        ):
-            desc_text = text.split(":", 1)[0].strip()
-        elif any(k in text.lower() for k in ["mrp", "rate", "discount", "final line"]):
+        if any(k in text.lower() for k in ["mrp", "rate", "discount", "final line"]):
             desc_text = re.sub(
                 r"[:=]?\s*\b(?:MRP|Rate(?:/Item)?|Unit\s*Price|Discount|Final\s*line\s*amount)\b.*$",
                 "",
                 text,
                 flags=re.IGNORECASE,
             ).strip(":= -|\t")
+        elif ":" in text and any(k in text.lower() for k in ["amount", "price"]):
+            desc_text = text.split(":", 1)[0].strip()
         else:
             desc_text = re.sub(
                 r"(?:[₹$€£¥]|Rs\.?|INR|USD|EUR|GBP)?\s*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*$",

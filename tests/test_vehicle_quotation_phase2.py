@@ -110,7 +110,9 @@ class TestPromptExamplesAndExactDisplay:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(1149900.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            1149900.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -140,7 +142,9 @@ class TestPromptExamplesAndExactDisplay:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(34500.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            34500.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -169,7 +173,9 @@ class TestPromptExamplesAndExactDisplay:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(11499.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            11499.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -198,7 +204,9 @@ class TestPromptExamplesAndExactDisplay:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(76250.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            76250.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -227,7 +235,9 @@ class TestPromptExamplesAndExactDisplay:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(24000.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            24000.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -256,7 +266,9 @@ class TestPromptExamplesAndExactDisplay:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(2250.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            2250.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -294,7 +306,9 @@ class TestStrictGuardrailAgainstInventingMeaning:
         doc_id = uuid4()
         page_id = uuid4()
         line = _make_line(text, doc_id=doc_id, page_id=page_id)
-        amt_field = _make_amount_field(5000.0, text, line.line_id, doc_id, page_id, line.bounding_box)
+        amt_field = _make_amount_field(
+            5000.0, text, line.line_id, doc_id, page_id, line.bounding_box
+        )
 
         comp = FinancialComponent(
             name=cleaned,
@@ -679,7 +693,9 @@ class TestOcrPreservationAndSpatialRelationships:
         assert len(doc.cost_breakdown) >= 7
 
         # Check Ex-Showroom precision
-        ex_show = next(c for c in doc.cost_breakdown if c.category == ComponentCategory.EX_SHOWROOM_PRICE)
+        ex_show = next(
+            c for c in doc.cost_breakdown if c.category == ComponentCategory.EX_SHOWROOM_PRICE
+        )
         assert float(ex_show.amount.normalized_value) == 1149900.50
         assert "₹" in ex_show.evidence
         assert ex_show.bounding_box is not None

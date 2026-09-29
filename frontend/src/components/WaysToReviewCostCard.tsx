@@ -18,17 +18,23 @@ import {
 import {
   ExtraCostAnalysisResult,
   FinancialComponent,
+  LineItem,
+  PotentialCostReductionSummary,
   SmartCostReductionQuestion,
   ValidationCheck,
 } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
+import { FinancialValue, Button } from "./ui";
 
 interface WaysToReviewCostCardProps {
-  components: FinancialComponent[];
+  components?: FinancialComponent[];
+  lineItems?: LineItem[];
   extraCostAnalysis?: ExtraCostAnalysisResult | null;
+  costReductionSummary?: PotentialCostReductionSummary | null;
   smartQuestions?: SmartCostReductionQuestion[];
   validationChecks?: ValidationCheck[];
   currency?: string | null;
+  onInspectEvidence?: (evidenceText: string) => void;
 }
 
 export type ReviewGroupKey =
@@ -38,6 +44,7 @@ export type ReviewGroupKey =
   | "COMPARE_ALTERNATIVES"
   | "POTENTIAL_OVERLAPS"
   | "AMOUNT_DISCREPANCIES"
+  | "UNEXPLAINED_CHARGES"
   | "QUESTIONS_TO_ASK";
 
 export interface ReviewCardItem {
@@ -47,22 +54,27 @@ export interface ReviewCardItem {
   whyItNeedsReview: string;
   evidence: string;
   questionToAsk: string;
+  suggestedAction?: string | null;
   group:
     | "POTENTIALLY_OPTIONAL"
     | "POTENTIALLY_NEGOTIABLE"
     | "COMPARE_ALTERNATIVES"
     | "POTENTIAL_OVERLAPS"
     | "AMOUNT_DISCREPANCIES"
+    | "UNEXPLAINED_CHARGES"
     | "QUESTIONS_TO_ASK";
   groupTitle: string;
 }
 
 export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
-  components,
+  components = [],
+  lineItems = [],
   extraCostAnalysis,
-  smartQuestions,
+  costReductionSummary,
+  smartQuestions = [],
   validationChecks = [],
   currency = "INR",
+  onInspectEvidence,
 }) => {
   const [activeGroup, setActiveGroup] = useState<ReviewGroupKey>("ALL");
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -259,24 +271,139 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
     }
   }
 
-  // ── 5. AMOUNT DISCREPANCIES ──
-  validationChecks.forEach((check) => {
-    if (check.status === "FAIL" && check.absolute_delta != null && check.absolute_delta > 0) {
-      const diffStr = formatCurrency(check.absolute_delta, currency);
-      const isSubtotal = check.check_code.includes("SUBTOTAL");
-      const title = isSubtotal ? "Component Reconciliation Discrepancy" : "Quoted Total Discrepancy";
-      const key = `disc:${check.check_code}:${check.absolute_delta}`;
-
+  // Ingest from costReductionSummary (Tiers)
+  if (costReductionSummary) {
+    const allTierItems = [
+      ...costReductionSummary.confirmed_optional_items,
+      ...costReductionSummary.potentially_optional_items,
+    ];
+    allTierItems.forEach((ti) => {
+      const key = `opt:${ti.name}:${ti.amount}`;
       if (!seenChargeKeys.has(key)) {
         seenChargeKeys.add(key);
+        items.push({
+          id: `opt-${ti.component_id}`,
+          chargeName: ti.name,
+          amount: ti.amount > 0 ? ti.amount : null,
+          whyItNeedsReview: `${ti.status_label}. Verify whether it can be removed from total commitment.`,
+          evidence: ti.evidence || `Quotation line: '${ti.name}'`,
+          questionToAsk: ti.amount > 0 ? `Is the ${formatCurrency(ti.amount, currency)} ${ti.name.toLowerCase()} package optional?` : `Is ${ti.name} optional?`,
+          group: "POTENTIALLY_OPTIONAL",
+          groupTitle: "1. POTENTIALLY OPTIONAL",
+        });
+      }
+    });
+  }
 
+  // Ingest from extraCostAnalysis (Dealer added, bundled, duplicates)
+  if (extraCostAnalysis?.flagged_costs) {
+    extraCostAnalysis.flagged_costs.forEach((fc) => {
+      const fcTitle = fc.normalized_name || fc.flag_label;
+      const key = `fc:${fcTitle}:${fc.amount}`;
+      if (seenChargeKeys.has(key)) return;
+
+      if (fc.flag_type === "potentially_optional" || fc.flag_type === "bundled_package") {
+        seenChargeKeys.add(key);
+        items.push({
+          id: `opt-${fc.component_id}`,
+          chargeName: fcTitle,
+          amount: fc.amount > 0 ? fc.amount : null,
+          whyItNeedsReview: fc.why_flagged || "Potentially optional. Verify whether it is required or can be removed.",
+          evidence: fc.evidence || `Quotation line: '${fcTitle}'`,
+          questionToAsk: fc.bundled_questions?.[0] || (fc.amount > 0 ? `Is the ${formatCurrency(fc.amount, currency)} ${fcTitle.toLowerCase()} optional?` : `Is ${fcTitle} optional?`),
+          group: "POTENTIALLY_OPTIONAL",
+          groupTitle: "1. POTENTIALLY OPTIONAL",
+        });
+      } else if (fc.flag_type === "dealer_added" || fc.flag_type === "additional_charge") {
+        seenChargeKeys.add(key);
+        items.push({
+          id: `neg-${fc.component_id}`,
+          chargeName: fcTitle,
+          amount: fc.amount > 0 ? fc.amount : null,
+          whyItNeedsReview: fc.why_flagged || "Potentially negotiable dealer fee.",
+          evidence: fc.evidence || `Quotation line: '${fcTitle}'`,
+          questionToAsk: fc.bundled_questions?.[0] || `Can this ${fc.amount > 0 ? formatCurrency(fc.amount, currency) : ""} charge be waived or negotiated?`,
+          group: "POTENTIALLY_NEGOTIABLE",
+          groupTitle: "2. POTENTIALLY NEGOTIABLE",
+        });
+      } else if (fc.flag_type === "possible_duplicate") {
+        seenChargeKeys.add(key);
+        items.push({
+          id: `overlap-${fc.component_id}`,
+          chargeName: fcTitle,
+          amount: fc.amount > 0 ? fc.amount : null,
+          whyItNeedsReview: fc.why_flagged || "Potential overlap — verify whether this is already included.",
+          evidence: fc.evidence || `Quotation line: '${fcTitle}'`,
+          questionToAsk: fc.bundled_questions?.[0] || `Verify whether ${fcTitle} is already covered in another line item.`,
+          suggestedAction: "Ask whether existing coverage already covers the same area.",
+          group: "POTENTIAL_OVERLAPS",
+          groupTitle: "4. POTENTIAL OVERLAPS",
+        });
+      } else if (fc.flag_type === "unclear_charge") {
+        seenChargeKeys.add(key);
+        items.push({
+          id: `unclear-${fc.component_id}`,
+          chargeName: fcTitle,
+          amount: fc.amount > 0 ? fc.amount : null,
+          whyItNeedsReview: fc.why_flagged || "The quotation lists this charge without an itemized explanation.",
+          evidence: fc.evidence || `Quotation line: '${fcTitle}'`,
+          questionToAsk: fc.bundled_questions?.[0] || `What service does this charge cover, and is it mandatory?`,
+          suggestedAction: "Ask the provider to explain what the charge represents.",
+          group: "UNEXPLAINED_CHARGES",
+          groupTitle: "6. UNEXPLAINED CHARGES",
+        });
+      }
+    });
+  }
+
+  // ── 5. AMOUNT DISCREPANCIES ──
+  validationChecks.forEach((check) => {
+    if (check.status === "FAIL") {
+      const deltaVal = check.absolute_delta != null ? check.absolute_delta : null;
+      const diffStr = deltaVal != null && deltaVal > 0 ? formatCurrency(deltaVal, currency) : "";
+      const isLineItem = check.check_code.includes("LINE_ITEM");
+      const isSubtotal = check.check_code.includes("SUBTOTAL");
+      const isNetTotal = check.check_code.includes("NET_TOTAL") || check.check_code.includes("TOTAL_CONSISTENCY");
+
+      let title = "Amount Discrepancy";
+      let why = check.message || "Arithmetic discrepancy requires verification.";
+      let qText = diffStr ? `The calculation differs by ${diffStr}. Which amount is correct?` : (check.message || "Please clarify this calculation.");
+      let amountVal = deltaVal;
+
+      if (isLineItem) {
+        const failedItem = lineItems.find((li) =>
+          check.message?.toLowerCase().includes(String(li.description?.normalized_value || "").toLowerCase())
+        );
+        const itemName = failedItem?.description?.normalized_value || "Line item";
+        title = `${itemName} — Line Item Calculation Discrepancy`;
+        why = `Displayed values do not mathematically explain the line amount on the document.`;
+        const matchingQ = smartQuestions.find((q) =>
+          q.question.toLowerCase().includes(String(itemName).toLowerCase())
+        );
+        qText = matchingQ?.question || `Could you please clarify how the line item amount for ${itemName} is calculated?`;
+        if (failedItem?.total_price?.normalized_value) {
+          amountVal = Number(failedItem.total_price.normalized_value);
+        }
+      } else if (isSubtotal) {
+        title = "Component Reconciliation Discrepancy";
+        why = `Mathematical discrepancy of ${diffStr} exists between the listed charges and stated subtotal.`;
+        qText = `The listed components differ from the stated subtotal by ${diffStr}. Which amount is correct?`;
+      } else if (isNetTotal) {
+        title = "Quoted Total Discrepancy";
+        why = `Mathematical discrepancy of ${diffStr} exists between subtotal minus discounts and the final quoted total.`;
+        qText = `The calculated total differs from the quoted total by ${diffStr}. Which amount is correct?`;
+      }
+
+      const key = `disc:${check.check_code}:${title}:${amountVal}`;
+      if (!seenChargeKeys.has(key)) {
+        seenChargeKeys.add(key);
         items.push({
           id: `disc-${check.validation_id}`,
           chargeName: title,
-          amount: check.absolute_delta,
-          whyItNeedsReview: `Mathematical discrepancy of ${diffStr} exists between the listed charges and stated amount on the quotation.`,
+          amount: amountVal,
+          whyItNeedsReview: why,
           evidence: `Validation check: ${check.check_code} (${check.message})`,
-          questionToAsk: `The listed components differ from the stated amount by ${diffStr}. Which amount is correct?`,
+          questionToAsk: qText,
           group: "AMOUNT_DISCREPANCIES",
           groupTitle: "5. AMOUNT DISCREPANCIES",
         });
@@ -286,7 +413,7 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
 
   // ── 6. QUESTIONS TO ASK (Compiled discovery questions) ──
   if (smartQuestions && smartQuestions.length > 0) {
-    smartQuestions.slice(0, 4).forEach((q) => {
+    smartQuestions.forEach((q) => {
       const key = `qta:${q.question}`;
       if (!seenChargeKeys.has(key)) {
         seenChargeKeys.add(key);
@@ -296,10 +423,11 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
           chargeName: q.related_charge || "Quotation Item",
           amount: q.amount_involved ?? null,
           whyItNeedsReview: q.reason || "Clarification needed prior to transaction authorization.",
-          evidence: q.evidence_source || "Quotation document",
+          evidence: q.ocr_line || q.evidence_source || "Quotation document",
           questionToAsk: q.question,
+          suggestedAction: q.suggested_action,
           group: "QUESTIONS_TO_ASK",
-          groupTitle: "6. QUESTIONS TO ASK",
+          groupTitle: "QUESTIONS TO ASK",
         });
       }
     });
@@ -318,6 +446,7 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
     COMPARE_ALTERNATIVES: items.filter((i) => i.group === "COMPARE_ALTERNATIVES").length,
     POTENTIAL_OVERLAPS: items.filter((i) => i.group === "POTENTIAL_OVERLAPS").length,
     AMOUNT_DISCREPANCIES: items.filter((i) => i.group === "AMOUNT_DISCREPANCIES").length,
+    UNEXPLAINED_CHARGES: items.filter((i) => i.group === "UNEXPLAINED_CHARGES").length,
     QUESTIONS_TO_ASK: items.filter((i) => i.group === "QUESTIONS_TO_ASK").length,
   };
 
@@ -336,22 +465,22 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
         return "bg-purple-500/15 text-purple-300 border-purple-500/30";
       case "AMOUNT_DISCREPANCIES":
         return "bg-rose-500/15 text-rose-300 border-rose-500/30";
+      case "UNEXPLAINED_CHARGES":
+        return "bg-orange-500/15 text-orange-300 border-orange-500/30";
       case "QUESTIONS_TO_ASK":
         return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+      default:
+        return "bg-white/10 text-slate-300 border-white/10";
     }
   };
 
-  if (items.length === 0) {
-    return null;
-  }
-
   return (
-    <div className="glass-panel rounded-2xl p-4 sm:p-6 border border-white/10 shadow-2xl space-y-5">
+    <div className="surface-card rounded-2xl border border-white/10 bg-app-card p-4 sm:p-6 shadow-card space-y-5">
       {/* Title & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/25">
               <Scale className="w-3.5 h-3.5" />
               BUYER DISCOVERY
             </span>
@@ -367,38 +496,48 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
           </p>
         </div>
 
-        <div className="text-xs font-mono px-3 py-1.5 rounded-xl bg-slate-900 border border-white/10 text-slate-300 self-start sm:self-auto">
+        <div className="text-xs font-mono px-3 py-1.5 rounded-xl bg-app-cardSubtle border border-white/10 text-slate-300 self-start sm:self-auto">
           {items.length} item{items.length !== 1 ? "s" : ""} to review
         </div>
       </div>
 
-      {/* Group Navigation Tabs (Phone-friendly horizontal scroll) */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none text-xs">
+      {/* Group Navigation Tabs (Accessible, touch-friendly min 44px) */}
+      <div
+        className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none text-xs"
+        role="tablist"
+        aria-label="Review Categories"
+      >
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeGroup === "ALL"}
           onClick={() => setActiveGroup("ALL")}
-          className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+          className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
             activeGroup === "ALL"
-              ? "bg-white text-slate-950 border-white shadow"
-              : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+              ? "bg-slate-100 text-slate-950 border-white shadow-sm"
+              : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
           }`}
         >
           All Items
-          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
             {groupCounts.ALL}
           </span>
         </button>
 
         {groupCounts.POTENTIALLY_OPTIONAL > 0 && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "POTENTIALLY_OPTIONAL"}
             onClick={() => setActiveGroup("POTENTIALLY_OPTIONAL")}
-            className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
               activeGroup === "POTENTIALLY_OPTIONAL"
-                ? "bg-amber-400 text-slate-950 border-amber-400 shadow"
-                : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+                ? "bg-amber-400 text-slate-950 border-amber-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
             }`}
           >
             1. Potentially Optional
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
               {groupCounts.POTENTIALLY_OPTIONAL}
             </span>
           </button>
@@ -406,15 +545,18 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
 
         {groupCounts.POTENTIALLY_NEGOTIABLE > 0 && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "POTENTIALLY_NEGOTIABLE"}
             onClick={() => setActiveGroup("POTENTIALLY_NEGOTIABLE")}
-            className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
               activeGroup === "POTENTIALLY_NEGOTIABLE"
-                ? "bg-indigo-400 text-slate-950 border-indigo-400 shadow"
-                : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+                ? "bg-indigo-400 text-slate-950 border-indigo-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
             }`}
           >
             2. Potentially Negotiable
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
               {groupCounts.POTENTIALLY_NEGOTIABLE}
             </span>
           </button>
@@ -422,15 +564,18 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
 
         {groupCounts.COMPARE_ALTERNATIVES > 0 && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "COMPARE_ALTERNATIVES"}
             onClick={() => setActiveGroup("COMPARE_ALTERNATIVES")}
-            className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
               activeGroup === "COMPARE_ALTERNATIVES"
-                ? "bg-cyan-400 text-slate-950 border-cyan-400 shadow"
-                : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+                ? "bg-cyan-400 text-slate-950 border-cyan-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
             }`}
           >
             3. Compare Alternatives
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
               {groupCounts.COMPARE_ALTERNATIVES}
             </span>
           </button>
@@ -438,15 +583,18 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
 
         {groupCounts.POTENTIAL_OVERLAPS > 0 && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "POTENTIAL_OVERLAPS"}
             onClick={() => setActiveGroup("POTENTIAL_OVERLAPS")}
-            className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
               activeGroup === "POTENTIAL_OVERLAPS"
-                ? "bg-purple-400 text-slate-950 border-purple-400 shadow"
-                : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+                ? "bg-purple-400 text-slate-950 border-purple-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
             }`}
           >
             4. Potential Overlaps
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
               {groupCounts.POTENTIAL_OVERLAPS}
             </span>
           </button>
@@ -454,31 +602,56 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
 
         {groupCounts.AMOUNT_DISCREPANCIES > 0 && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "AMOUNT_DISCREPANCIES"}
             onClick={() => setActiveGroup("AMOUNT_DISCREPANCIES")}
-            className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
               activeGroup === "AMOUNT_DISCREPANCIES"
-                ? "bg-rose-400 text-slate-950 border-rose-400 shadow"
-                : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+                ? "bg-rose-400 text-slate-950 border-rose-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
             }`}
           >
             5. Amount Discrepancies
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
               {groupCounts.AMOUNT_DISCREPANCIES}
+            </span>
+          </button>
+        )}
+
+        {groupCounts.UNEXPLAINED_CHARGES > 0 && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "UNEXPLAINED_CHARGES"}
+            onClick={() => setActiveGroup("UNEXPLAINED_CHARGES")}
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
+              activeGroup === "UNEXPLAINED_CHARGES"
+                ? "bg-orange-400 text-slate-950 border-orange-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
+            }`}
+          >
+            6. Unexplained Charges
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
+              {groupCounts.UNEXPLAINED_CHARGES}
             </span>
           </button>
         )}
 
         {groupCounts.QUESTIONS_TO_ASK > 0 && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === "QUESTIONS_TO_ASK"}
             onClick={() => setActiveGroup("QUESTIONS_TO_ASK")}
-            className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+            className={`px-3.5 py-2.5 rounded-xl font-bold whitespace-nowrap transition flex items-center gap-1.5 border min-h-[44px] touch-target ${
               activeGroup === "QUESTIONS_TO_ASK"
-                ? "bg-emerald-400 text-slate-950 border-emerald-400 shadow"
-                : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-white/5"
+                ? "bg-emerald-400 text-slate-950 border-emerald-400 shadow-sm"
+                : "bg-slate-900/80 text-slate-300 border-white/8 hover:bg-white/5"
             }`}
           >
-            6. Questions to Ask
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+            Questions to Ask
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
               {groupCounts.QUESTIONS_TO_ASK}
             </span>
           </button>
@@ -494,7 +667,7 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
           return (
             <div
               key={item.id}
-              className="p-4 sm:p-5 rounded-xl bg-slate-900/80 border border-white/10 hover:border-white/20 transition space-y-3 shadow-md"
+              className="p-4 sm:p-5 rounded-xl bg-app-cardSubtle border border-white/8 hover:border-white/16 transition space-y-3 shadow-subtle"
             >
               {/* Header: Charge Name, Category Pill, and Amount */}
               <div className="flex items-start justify-between gap-3">
@@ -513,9 +686,12 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
 
                 {item.amount != null && (
                   <div className="text-right shrink-0">
-                    <span className="text-base sm:text-lg font-mono font-extrabold text-white block">
-                      {formatCurrency(item.amount, currency)}
-                    </span>
+                    <FinancialValue
+                      amount={item.amount}
+                      currency={currency}
+                      variant="item"
+                      className="text-base sm:text-lg font-extrabold text-white block"
+                    />
                     <span className="text-[10px] text-slate-400 font-sans">
                       Quoted amount
                     </span>
@@ -524,7 +700,7 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
               </div>
 
               {/* Why it needs review */}
-              <div className="bg-slate-950/60 rounded-lg p-3 border border-white/5 space-y-1">
+              <div className="bg-app-cardInset rounded-lg p-3 border border-white/4 space-y-1">
                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
                   Why it needs review
                 </span>
@@ -534,16 +710,29 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
               </div>
 
               {/* Evidence */}
-              <div className="text-xs text-slate-400 flex items-start gap-1.5">
-                <span className="font-semibold text-slate-300 shrink-0">Evidence:</span>
-                <span className="font-mono text-[11px] text-slate-300 break-words">
-                  {item.evidence}
-                </span>
+              <div className="flex items-center justify-between text-xs text-slate-400 gap-2">
+                <div className="flex items-start gap-1.5 min-w-0">
+                  <span className="font-semibold text-slate-300 shrink-0">Evidence:</span>
+                  <span className="font-mono text-[11px] text-slate-300 break-words">
+                    {item.evidence}
+                  </span>
+                </div>
+                {onInspectEvidence && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onInspectEvidence(item.chargeName || item.evidence)}
+                    className="text-[11px] py-1 px-2.5 min-h-[32px] text-brand-400 hover:text-brand-300 shrink-0"
+                  >
+                    <span>Inspect on slip</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </Button>
+                )}
               </div>
 
-              {/* Question to ask with Copy Button */}
-              <div className="pt-2 border-t border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-brand-500/5 p-3 rounded-lg border border-brand-500/20">
-                <div className="space-y-0.5">
+              {/* Question to ask with Copy Button & Action */}
+              <div className="pt-2 border-t border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-app-cardInset p-3 rounded-lg border border-white/6">
+                <div className="space-y-1">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-brand-300 flex items-center gap-1">
                     <MessageSquareQuote className="w-3 h-3 text-brand-400" />
                     Question to ask seller
@@ -551,14 +740,22 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
                   <p className="text-xs sm:text-sm font-medium text-white italic">
                     "{item.questionToAsk}"
                   </p>
+                  {item.suggestedAction && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-brand-300 font-medium pt-0.5">
+                      <span className="px-1.5 py-0.5 rounded bg-brand-500/15 border border-brand-500/25 text-[10px] uppercase tracking-wider font-semibold">
+                        Action
+                      </span>
+                      <span>{item.suggestedAction}</span>
+                    </div>
+                  )}
                 </div>
 
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => handleCopy(item.id, item.questionToAsk)}
-                  className={`self-start sm:self-auto shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition font-medium border ${
-                    isCopied
-                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                      : "bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700"
+                  className={`self-start sm:self-auto shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 ${
+                    isCopied ? "border-emerald-500/30 text-emerald-300 bg-emerald-500/10" : ""
                   }`}
                   title="Copy question to ask seller"
                 >
@@ -570,10 +767,10 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
                   ) : (
                     <>
                       <Copy className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Copy Question</span>
+                      <span>Copy</span>
                     </>
                   )}
-                </button>
+                </Button>
               </div>
             </div>
           );
@@ -582,3 +779,4 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
     </div>
   );
 };
+

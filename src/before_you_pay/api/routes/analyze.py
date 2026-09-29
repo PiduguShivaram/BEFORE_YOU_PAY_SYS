@@ -22,6 +22,10 @@ router = APIRouter(tags=["Analysis"])
 )
 async def analyze_document(
     file: UploadFile = File(..., description="Document scan image or PDF"),
+    supporting_file: UploadFile | None = File(
+        default=None,
+        description="Optional supporting document scan image or PDF (warranty, insurance, past quote)",
+    ),
     user_id: UUID = Form(..., description="Tenant user ID"),
     document_classification: DocumentClassification = Form(
         default=DocumentClassification.OTHER,
@@ -34,12 +38,19 @@ async def analyze_document(
     content = await file.read()
     mime = file.content_type or "application/octet-stream"
 
+    supporting_content = await supporting_file.read() if supporting_file else None
+    supporting_mime = (
+        (supporting_file.content_type or "application/octet-stream") if supporting_file else None
+    )
+
     return await pipeline.run_full_pipeline(
         document_id=doc_uuid,
         user_id=user_id,
         file_bytes=content,
         mime_type=mime,
         document_type_hint=document_classification,
+        supporting_file_bytes=supporting_content,
+        supporting_mime_type=supporting_mime,
     )
 
 
@@ -50,6 +61,10 @@ async def analyze_document(
 )
 async def analyze_document_stream(
     file: UploadFile = File(..., description="Document scan image or PDF"),
+    supporting_file: UploadFile | None = File(
+        default=None,
+        description="Optional supporting document scan image or PDF (warranty, insurance, past quote)",
+    ),
     user_id: UUID = Form(..., description="Tenant user ID"),
     document_classification: DocumentClassification = Form(
         default=DocumentClassification.OTHER,
@@ -62,6 +77,11 @@ async def analyze_document_stream(
     content = await file.read()
     mime = file.content_type or "application/octet-stream"
 
+    supporting_content = await supporting_file.read() if supporting_file else None
+    supporting_mime = (
+        (supporting_file.content_type or "application/octet-stream") if supporting_file else None
+    )
+
     async def event_generator():
         try:
             async for step in pipeline.run_streaming_pipeline(
@@ -70,18 +90,22 @@ async def analyze_document_stream(
                 file_bytes=content,
                 mime_type=mime,
                 document_type_hint=document_classification,
+                supporting_file_bytes=supporting_content,
+                supporting_mime_type=supporting_mime,
             ):
-                payload = json.dumps(step)
+                payload = json.dumps(step, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
         except (asyncio.CancelledError, GeneratorExit):
             return
         except Exception as exc:
-            err_payload = json.dumps({"stage": "error", "error": str(exc), "progress": 0})
+            err_payload = json.dumps(
+                {"stage": "error", "error": str(exc), "progress": 0}, ensure_ascii=False
+            )
             yield f"data: {err_payload}\n\n"
 
     return StreamingResponse(
         event_generator(),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

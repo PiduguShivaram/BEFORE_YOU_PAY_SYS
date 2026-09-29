@@ -18,7 +18,10 @@ def test_cors_origins_default():
 
 def test_cors_origins_json_array():
     """Verify JSON array formatted CORS_ORIGINS parses correctly."""
-    with mock.patch.dict(os.environ, {"CORS_ORIGINS": '["https://before-you-pay-sys.vercel.app", "http://localhost:3000"]'}):
+    with mock.patch.dict(
+        os.environ,
+        {"CORS_ORIGINS": '["https://before-you-pay-sys.vercel.app", "http://localhost:3000"]'},
+    ):
         settings = Settings()
         assert settings.cors_origins == [
             "https://before-you-pay-sys.vercel.app",
@@ -37,7 +40,9 @@ def test_cors_origins_single_url():
 
 def test_cors_origins_comma_separated():
     """Verify comma-separated URLs parse cleanly into list."""
-    with mock.patch.dict(os.environ, {"CORS_ORIGINS": "http://localhost:3000, https://before-you-pay-sys.vercel.app"}):
+    with mock.patch.dict(
+        os.environ, {"CORS_ORIGINS": "http://localhost:3000, https://before-you-pay-sys.vercel.app"}
+    ):
         settings = Settings()
         assert settings.cors_origins == [
             "http://localhost:3000",

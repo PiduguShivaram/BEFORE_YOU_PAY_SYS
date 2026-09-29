@@ -345,7 +345,8 @@ class OCRQualityEvaluator:
             tok
             for tok in tokens
             if tok.lower().strip(".,:;()[]\"'=-+~") in COMMON_VOCABULARY
-            or tok.lower().strip(".,:;()[]\"'=-+~").replace(".", "").replace("+", "") in COMMON_VOCABULARY
+            or tok.lower().strip(".,:;()[]\"'=-+~").replace(".", "").replace("+", "")
+            in COMMON_VOCABULARY
             or re.match(r"^[\$€£₹¥]?\d+(?:[.,]\d+)*%?$", tok.strip(".,:;()[]\"'=-+~"))
             or tok.strip() in ("=", "=>", "-", "+", ":")
         ]
@@ -364,7 +365,9 @@ class OCRQualityEvaluator:
 
         # Decision Matrix
         # 1. Extreme sparsity
-        if (character_count < 15 and word_count <= 2) or ((character_count < 25 or word_count < 4) and vocabulary_ratio < 0.25):
+        if (character_count < 15 and word_count <= 2) or (
+            (character_count < 25 or word_count < 4) and vocabulary_ratio < 0.25
+        ):
             reasons.append(
                 f"Extracted text volume is too sparse ({character_count} chars, {word_count} tokens)."
             )
@@ -436,7 +439,9 @@ class OCRQualityEvaluator:
             )
 
         # 5. Moderate quality: readable tokens with informal/handwritten phonetic misspellings or non-standard terms
-        has_informal_terms = bool(re.search(r"\b(exshorum|insorane|insorage|waranty|odfer|ex-shorum)\b", full_text, re.I))
+        has_informal_terms = bool(
+            re.search(r"\b(exshorum|insorane|insorage|waranty|odfer|ex-shorum)\b", full_text, re.I)
+        )
         is_handwriting_or_vision = (
             has_informal_terms
             or (ocr_result.recovery_pass >= 4 and vocabulary_ratio < 0.60)
@@ -461,7 +466,9 @@ class OCRQualityEvaluator:
 
         # 6. Clean, reliable high-fidelity OCR (standard machine-printed documents)
         score = round(min(1.0, 0.85 + 0.15 * (1.0 - garbage_token_ratio)), 2)
-        reasons.append("OCR text displays high structural coherence and standard lexical vocabulary.")
+        reasons.append(
+            "OCR text displays high structural coherence and standard lexical vocabulary."
+        )
         return OCRQualityResult(
             status=OCRQualityStatus.GOOD,
             score=score,

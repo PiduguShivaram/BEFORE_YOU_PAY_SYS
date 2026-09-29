@@ -321,7 +321,9 @@ class TestExtractionEngineE2EOptionality:
         assert len(doc.cost_breakdown) >= 6
 
         # 1. Ex-showroom -> Confirmed mandatory
-        ex_show = next(c for c in doc.cost_breakdown if c.category == ComponentCategory.EX_SHOWROOM_PRICE)
+        ex_show = next(
+            c for c in doc.cost_breakdown if c.category == ComponentCategory.EX_SHOWROOM_PRICE
+        )
         assert ex_show.optionality_status == OptionalityStatus.CONFIRMED_MANDATORY
         assert ex_show.optionality_display == "Confirmed mandatory"
 
@@ -330,23 +332,37 @@ class TestExtractionEngineE2EOptionality:
         assert tcs.optionality_status == OptionalityStatus.CONFIRMED_MANDATORY
 
         # 3. Optional accessories -> Confirmed optional (because line explicitly stated "Optional")
-        acc = next(c for c in doc.cost_breakdown if c.category in (ComponentCategory.ACCESSORY, ComponentCategory.ACCESSORY_PACKAGE))
+        acc = next(
+            c
+            for c in doc.cost_breakdown
+            if c.category in (ComponentCategory.ACCESSORY, ComponentCategory.ACCESSORY_PACKAGE)
+        )
         assert acc.optionality_status == OptionalityStatus.CONFIRMED_OPTIONAL
         assert acc.optionality_display == "Confirmed optional"
 
         # 4. Extended Warranty -> Potentially optional ("Verify whether this can be removed.")
-        ew = next(c for c in doc.cost_breakdown if c.category == ComponentCategory.EXTENDED_WARRANTY)
+        ew = next(
+            c for c in doc.cost_breakdown if c.category == ComponentCategory.EXTENDED_WARRANTY
+        )
         assert ew.optionality_status == OptionalityStatus.POTENTIALLY_OPTIONAL
         assert ew.optionality_display == "Potentially optional"
         assert "Verify whether this can be removed" in ew.requires_confirmation
 
         # 5. Handling charges -> Potentially optional ("Contest with dealer")
-        hdl = next(c for c in doc.cost_breakdown if c.category in (ComponentCategory.HANDLING_FEE, ComponentCategory.LOGISTICS_FEE))
+        hdl = next(
+            c
+            for c in doc.cost_breakdown
+            if c.category in (ComponentCategory.HANDLING_FEE, ComponentCategory.LOGISTICS_FEE)
+        )
         assert hdl.optionality_status == OptionalityStatus.POTENTIALLY_OPTIONAL
         assert "Contest with dealer" in hdl.requires_confirmation
 
         # 6. Bare registration without mandatory label -> Requires verification
-        reg = next(c for c in doc.cost_breakdown if c.category in (ComponentCategory.REGISTRATION, ComponentCategory.RC))
+        reg = next(
+            c
+            for c in doc.cost_breakdown
+            if c.category in (ComponentCategory.REGISTRATION, ComponentCategory.RC)
+        )
         assert reg.optionality_status == OptionalityStatus.UNCLEAR
         assert "Requires verification" in reg.optionality_display
 
@@ -361,9 +377,15 @@ class TestNeverConvertsUncertaintyIntoCertainty:
             amount=amt,
         )
 
-        assert comp.optionality_status in (OptionalityStatus.POTENTIALLY_OPTIONAL, OptionalityStatus.UNCLEAR)
+        assert comp.optionality_status in (
+            OptionalityStatus.POTENTIALLY_OPTIONAL,
+            OptionalityStatus.UNCLEAR,
+        )
         assert comp.optionality_status != OptionalityStatus.CONFIRMED_MANDATORY
-        assert any(term in comp.requires_confirmation.lower() for term in ("verify", "clarify", "contest", "removal", "seller"))
+        assert any(
+            term in comp.requires_confirmation.lower()
+            for term in ("verify", "clarify", "contest", "removal", "seller")
+        )
 
     def test_manual_explicit_override_is_honored(self):
         """User-provided explicit context is respected without hallucinating extra requirements."""

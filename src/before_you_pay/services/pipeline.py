@@ -1,23 +1,28 @@
 """End-to-end pipeline orchestrator for document analysis."""
 
+import time
 from collections.abc import AsyncGenerator
 from uuid import UUID, uuid4
 
 from before_you_pay.core.errors import ContractViolationException
 from before_you_pay.models import (
     AnalysisState,
+    ContextualFinding,
     DocumentClassification,
     ExtractedField,
     FieldProvenance,
     FinalDecisionSupportResult,
     OCRQualityStatus,
     OkfQuery,
+    RagEvidenceChunk,
     RagQuery,
     StructuredFinancialDocument,
+    SupportingDocumentAnalysis,
     ValidationCheck,
     ValidationSeverity,
     ValidationStatus,
 )
+from before_you_pay.services.cross_document_comparison import CrossDocumentComparisonService
 from before_you_pay.services.llm_extraction import HybridLlmExtractionEngine
 from before_you_pay.services.ocr import SpatialOcrEngine
 from before_you_pay.services.ocr_quality import OCRQualityEvaluator
@@ -51,6 +56,7 @@ class PipelineService:
         self.validation_engine = validation_engine or DeterministicValidationEngine()
         self.reasoning_engine = reasoning_engine or SemanticReasoningEngine()
         self.result_service = result_service or ResultAggregatorService()
+        self.cross_doc_service = CrossDocumentComparisonService()
 
     async def run_full_pipeline(
         self,
@@ -59,13 +65,19 @@ class PipelineService:
         file_bytes: bytes,
         mime_type: str,
         document_type_hint: DocumentClassification = DocumentClassification.OTHER,
+        supporting_file_bytes: bytes | None = None,
+        supporting_mime_type: str | None = None,
     ) -> FinalDecisionSupportResult:
         """Execute all 7 stages sequentially without storing unbounded state in RAM."""
+        t_pipeline_start = time.monotonic()
+
         # 1. Precondition check (glare, blur, size, MIME)
         self.precondition.validate_file(file_bytes, mime_type, user_id)
 
         # 2. Spatial OCR with Multi-Pass Recovery
+        t_ocr_start = time.monotonic()
         ocr_result = await self.ocr_engine.process_document(document_id, file_bytes, mime_type)
+        t_ocr_end = time.monotonic()
         ocr_quality = ocr_result.quality or self.ocr_quality_evaluator.evaluate(ocr_result)
 
         # 2b. Deterministic OCR Quality Gate
@@ -76,6 +88,10 @@ class PipelineService:
                 ocr_result=ocr_result,
                 ocr_quality=ocr_quality,
                 analysis_state=AnalysisState.DOCUMENT_UNREADABLE,
+                pipeline_metrics={
+                    "ocr_duration_ms": round((t_ocr_end - t_ocr_start) * 1000, 1),
+                    "total_pipeline_ms": round((time.monotonic() - t_pipeline_start) * 1000, 1),
+                },
             )
 
         if ocr_quality.status == OCRQualityStatus.UNRELIABLE:
@@ -85,9 +101,14 @@ class PipelineService:
                 ocr_result=ocr_result,
                 ocr_quality=ocr_quality,
                 analysis_state=AnalysisState.OCR_UNRELIABLE,
+                pipeline_metrics={
+                    "ocr_duration_ms": round((t_ocr_end - t_ocr_start) * 1000, 1),
+                    "total_pipeline_ms": round((time.monotonic() - t_pipeline_start) * 1000, 1),
+                },
             )
 
         # 3. Structured Extraction (Gemini Failover Pool with Regex Fallback)
+        t_ext_start = time.monotonic()
         try:
             extraction_res = self.extraction_engine.extract(
                 document_id=document_id,
@@ -95,6 +116,7 @@ class PipelineService:
                 ocr_result=ocr_result,
                 document_type_hint=document_type_hint,
             )
+            t_ext_end = time.monotonic()
             if isinstance(extraction_res, tuple):
                 extracted_doc, _ = extraction_res
             else:
@@ -147,23 +169,123 @@ class PipelineService:
                 )
             raise
 
-        # 4. User Document RAG Retrieval (SQLite, isolated by user_id)
+        # 4. User Document RAG Retrieval (SQLite, isolated by user_id) + Phase 2: Supporting Doc
+        supporting_doc_analysis: SupportingDocumentAnalysis | None = None
+        supporting_doc_context: dict | None = None
+        supporting_doc_chunks: list[RagEvidenceChunk] = []
+        supporting_doc_id_val = None
+
+        if supporting_file_bytes:
+            supporting_doc_id_val = uuid4()
+            supp_mime = supporting_mime_type or "application/octet-stream"
+            self.precondition.validate_file(supporting_file_bytes, supp_mime, user_id)
+            supp_ocr = await self.ocr_engine.process_document(
+                supporting_doc_id_val, supporting_file_bytes, supp_mime
+            )
+            supp_lines = [line for p in supp_ocr.pages for line in p.lines]
+
+            # Detect supporting document type from its OCR text (heuristic)
+            supp_text_lower = " ".join(ln.text for ln in supp_lines).lower()
+            if any(k in supp_text_lower for k in ["warranty", "warrantee", "guarantee"]):
+                supp_doc_type = DocumentClassification.WARRANTY
+            elif any(k in supp_text_lower for k in ["insurance", "policy", "premium"]):
+                supp_doc_type = DocumentClassification.CONTRACT
+            elif any(k in supp_text_lower for k in ["invoice", "bill no", "gst invoice"]):
+                supp_doc_type = DocumentClassification.INVOICE
+            elif any(k in supp_text_lower for k in ["quotation", "quote", "proforma"]):
+                supp_doc_type = DocumentClassification.QUOTATION
+            else:
+                supp_doc_type = DocumentClassification.CONTRACT
+
+            # Chunk the supporting document at 3-line windows for RAG storage
+            for p in supp_ocr.pages:
+                for i in range(0, len(p.lines), 3):
+                    chunk_lines = p.lines[i : i + 3]
+                    txt = " ".join(ln.text for ln in chunk_lines)
+                    if len(txt.strip()) >= 5:
+                        supporting_doc_chunks.append(
+                            RagEvidenceChunk(
+                                evidence_id=uuid4(),
+                                user_id=user_id,
+                                source_document_id=supporting_doc_id_val,
+                                source_document_type=supp_doc_type,
+                                page_number=p.page_number,
+                                source_text=txt,
+                                bounding_box=chunk_lines[0].bounding_box if chunk_lines else None,
+                                similarity_score=1.0,
+                            )
+                        )
+
+            if supporting_doc_chunks:
+                await self.rag_service.index_document_chunks(
+                    user_id, supporting_doc_id_val, supporting_doc_chunks
+                )
+
+            # Backward-compatible legacy dict (for tests / older clients)
+            supporting_doc_context = {
+                "supporting_document_id": str(supporting_doc_id_val),
+                "supporting_line_count": len(supp_lines),
+                "chunks_indexed": len(supporting_doc_chunks),
+                "supporting_preview": " ".join(ln.text for ln in supp_lines[:5]),
+                "source_type": supp_doc_type.value,
+            }
+
         keywords = []
         if extracted_doc.vendor_name:
             keywords.append(str(extracted_doc.vendor_name.normalized_value))
         keywords.extend(
             [str(item.description.normalized_value) for item in extracted_doc.line_items[:3]]
         )
+        if extracted_doc.cost_breakdown:
+            keywords.extend(
+                [str(c.normalized_label or c.name) for c in extracted_doc.cost_breakdown[:6]]
+            )
         query_text = " ".join(keywords) or "financial commitment warranty agreement"
 
         rag_query = RagQuery(
             user_id=user_id,
             current_document_id=document_id,
             query_text=query_text,
-            top_k=5,
-            min_similarity=0.30,
+            top_k=8,
+            min_similarity=0.20,
         )
         rag_evidence = await self.rag_service.retrieve(rag_query)
+
+        # Phase 2: Cross-document contextual comparison
+        contextual_findings: list[ContextualFinding] = []
+        if supporting_doc_id_val and supporting_doc_chunks:
+            # Retrieve only supporting document chunks for direct comparison
+            supporting_rag_query = RagQuery(
+                user_id=user_id,
+                current_document_id=document_id,
+                query_text=query_text,
+                top_k=10,
+                min_similarity=0.10,
+                document_types=[supp_doc_type],  # type: ignore[possibly-undefined]
+            )
+            supporting_chunks_retrieved = await self.rag_service.retrieve(supporting_rag_query)
+
+            if supporting_chunks_retrieved:
+                contextual_findings = self.cross_doc_service.compare(
+                    document=extracted_doc,
+                    supporting_chunks=supporting_chunks_retrieved,
+                    supporting_doc_id=supporting_doc_id_val,
+                    supporting_doc_type=supp_doc_type,  # type: ignore[possibly-undefined]
+                )
+
+            supporting_doc_analysis = SupportingDocumentAnalysis(
+                supporting_document_id=supporting_doc_id_val,
+                supporting_document_type=supp_doc_type.value,  # type: ignore[possibly-undefined]
+                supporting_line_count=len(supp_lines),  # type: ignore[possibly-undefined]
+                chunks_indexed=len(supporting_doc_chunks),
+                supporting_preview=" ".join(  # type: ignore[possibly-undefined]
+                    ln.text for ln in supp_lines[:5]
+                ),
+                findings=contextual_findings,
+                retrieved_chunks_count=len(supporting_chunks_retrieved)
+                if supporting_doc_id_val and supporting_doc_chunks
+                else 0,
+            )
 
         # 5. OKF Catalog Retrieval (Curated JSON rules)
         okf_query = OkfQuery(
@@ -180,10 +302,20 @@ class PipelineService:
         )
 
         # 7. Deterministic Validation (sole arithmetic authority)
+        t_val_start = time.monotonic()
         validation_checks = self.validation_engine.validate(extracted_doc)
+        t_val_end = time.monotonic()
 
         all_lines = [line for p in ocr_result.pages for line in p.lines]
         raw_ocr_lines = [line.text for line in all_lines]
+
+        total_ms = round((time.monotonic() - t_pipeline_start) * 1000, 1)
+        pipeline_metrics = {
+            "ocr_duration_ms": round((t_ocr_end - t_ocr_start) * 1000, 1),
+            "extraction_duration_ms": round((t_ext_end - t_ext_start) * 1000, 1),
+            "validation_duration_ms": round((t_val_end - t_val_start) * 1000, 1),
+            "total_pipeline_ms": total_ms,
+        }
 
         # 8. Compile Final Result with visual bounding boxes for mobile UI
         return self.result_service.compile_result(
@@ -195,6 +327,10 @@ class PipelineService:
             raw_ocr_lines=raw_ocr_lines,
             ocr_lines=all_lines,
             ocr_quality=ocr_quality,
+            supporting_document_context=supporting_doc_context,
+            contextual_findings=contextual_findings,
+            supporting_document_analysis=supporting_doc_analysis,
+            pipeline_metrics=pipeline_metrics,
         )
 
     async def run_streaming_pipeline(
@@ -204,6 +340,8 @@ class PipelineService:
         file_bytes: bytes,
         mime_type: str,
         document_type_hint: DocumentClassification = DocumentClassification.OTHER,
+        supporting_file_bytes: bytes | None = None,
+        supporting_mime_type: str | None = None,
     ) -> AsyncGenerator[dict, None]:
         """Execute 7-stage pipeline yielding real-time progressive SSE updates."""
         # Stage 1: Precondition check
@@ -382,12 +520,79 @@ class PipelineService:
             "message": "Cross-referencing tenant history (SQLite RAG) and curated OKF rules...",
             "progress": 70,
         }
+
+        supporting_doc_analysis: SupportingDocumentAnalysis | None = None
+        supporting_doc_context: dict | None = None
+        supporting_doc_chunks: list[RagEvidenceChunk] = []
+        supporting_doc_id_val = None
+
+        if supporting_file_bytes:
+            supporting_doc_id_val = uuid4()
+            supp_mime = supporting_mime_type or "application/octet-stream"
+            self.precondition.validate_file(supporting_file_bytes, supp_mime, user_id)
+            supp_ocr = await self.ocr_engine.process_document(
+                supporting_doc_id_val, supporting_file_bytes, supp_mime
+            )
+            supp_lines = [line for p in supp_ocr.pages for line in p.lines]
+
+            # Detect supporting document type heuristically from OCR text
+            supp_text_lower = " ".join(ln.text for ln in supp_lines).lower()
+            if any(k in supp_text_lower for k in ["warranty", "warrantee", "guarantee"]):
+                supp_doc_type = DocumentClassification.WARRANTY
+            elif any(k in supp_text_lower for k in ["insurance", "policy", "premium"]):
+                supp_doc_type = DocumentClassification.CONTRACT
+            elif any(k in supp_text_lower for k in ["invoice", "bill no", "gst invoice"]):
+                supp_doc_type = DocumentClassification.INVOICE
+            elif any(k in supp_text_lower for k in ["quotation", "quote", "proforma"]):
+                supp_doc_type = DocumentClassification.QUOTATION
+            else:
+                supp_doc_type = DocumentClassification.CONTRACT
+
+            for p in supp_ocr.pages:
+                for i in range(0, len(p.lines), 3):
+                    chunk_lines = p.lines[i : i + 3]
+                    txt = " ".join(ln.text for ln in chunk_lines)
+                    if len(txt.strip()) >= 5:
+                        supporting_doc_chunks.append(
+                            RagEvidenceChunk(
+                                evidence_id=uuid4(),
+                                user_id=user_id,
+                                source_document_id=supporting_doc_id_val,
+                                source_document_type=supp_doc_type,
+                                page_number=p.page_number,
+                                source_text=txt,
+                                bounding_box=chunk_lines[0].bounding_box if chunk_lines else None,
+                                similarity_score=1.0,
+                            )
+                        )
+            if supporting_doc_chunks:
+                await self.rag_service.index_document_chunks(
+                    user_id, supporting_doc_id_val, supporting_doc_chunks
+                )
+            supporting_doc_context = {
+                "supporting_document_id": str(supporting_doc_id_val),
+                "supporting_line_count": len(supp_lines),
+                "chunks_indexed": len(supporting_doc_chunks),
+                "supporting_preview": " ".join(ln.text for ln in supp_lines[:5]),
+                "source_type": supp_doc_type.value,
+            }
+            yield {
+                "stage": "knowledge_retrieval",
+                "status": "in_progress",
+                "message": f"Ingested supporting document ({len(supp_lines)} lines, {len(supporting_doc_chunks)} context chunks, detected type: {supp_doc_type.value}) for cross-document audit.",
+                "progress": 75,
+            }
+
         keywords = []
         if extracted_doc.vendor_name:
             keywords.append(str(extracted_doc.vendor_name.normalized_value))
         keywords.extend(
             [str(item.description.normalized_value) for item in extracted_doc.line_items[:3]]
         )
+        if extracted_doc.cost_breakdown:
+            keywords.extend(
+                [str(c.normalized_label or c.name) for c in extracted_doc.cost_breakdown[:6]]
+            )
         query_text = " ".join(keywords) or "financial commitment warranty agreement"
 
         rag_evidence = await self.rag_service.retrieve(
@@ -395,10 +600,46 @@ class PipelineService:
                 user_id=user_id,
                 current_document_id=document_id,
                 query_text=query_text,
-                top_k=5,
-                min_similarity=0.30,
+                top_k=8,
+                min_similarity=0.20,
             )
         )
+
+        # Phase 2: Cross-document contextual comparison
+        contextual_findings: list[ContextualFinding] = []
+        if supporting_doc_id_val and supporting_doc_chunks:
+            supporting_rag_query = RagQuery(
+                user_id=user_id,
+                current_document_id=document_id,
+                query_text=query_text,
+                top_k=10,
+                min_similarity=0.10,
+                document_types=[supp_doc_type],  # type: ignore[possibly-undefined]
+            )
+            supporting_chunks_retrieved = await self.rag_service.retrieve(supporting_rag_query)
+
+            if supporting_chunks_retrieved:
+                contextual_findings = self.cross_doc_service.compare(
+                    document=extracted_doc,
+                    supporting_chunks=supporting_chunks_retrieved,
+                    supporting_doc_id=supporting_doc_id_val,
+                    supporting_doc_type=supp_doc_type,  # type: ignore[possibly-undefined]
+                )
+
+            supporting_doc_analysis = SupportingDocumentAnalysis(
+                supporting_document_id=supporting_doc_id_val,
+                supporting_document_type=supp_doc_type.value,  # type: ignore[possibly-undefined]
+                supporting_line_count=len(supp_lines),  # type: ignore[possibly-undefined]
+                chunks_indexed=len(supporting_doc_chunks),
+                supporting_preview=" ".join(  # type: ignore[possibly-undefined]
+                    ln.text for ln in supp_lines[:5]
+                ),
+                findings=contextual_findings,
+                retrieved_chunks_count=len(supporting_chunks_retrieved)
+                if supporting_doc_id_val and supporting_doc_chunks
+                else 0,
+            )
+
         okf_evidence = await self.okf_service.query_rules(
             OkfQuery(
                 document_type=extracted_doc.document_type,
@@ -408,9 +649,20 @@ class PipelineService:
         yield {
             "stage": "knowledge_retrieval",
             "status": "completed",
-            "message": f"Retrieved {len(rag_evidence)} prior records and {len(okf_evidence)} compliance rules.",
+            "message": (
+                f"Retrieved {len(rag_evidence)} prior records and {len(okf_evidence)} compliance rules."
+                + (
+                    f" Cross-document comparison produced {len(contextual_findings)} finding(s)."
+                    if contextual_findings
+                    else ""
+                )
+            ),
             "progress": 80,
-            "data": {"rag_count": len(rag_evidence), "okf_count": len(okf_evidence)},
+            "data": {
+                "rag_count": len(rag_evidence),
+                "okf_count": len(okf_evidence),
+                "contextual_findings_count": len(contextual_findings),
+            },
         }
 
         # Stage 5: Deterministic Arithmetic Verification Gate
@@ -471,6 +723,9 @@ class PipelineService:
             raw_ocr_lines=raw_ocr_lines,
             ocr_lines=all_lines,
             ocr_quality=ocr_quality,
+            supporting_document_context=supporting_doc_context,
+            contextual_findings=contextual_findings,
+            supporting_document_analysis=supporting_doc_analysis,
         )
         yield {
             "stage": "complete",

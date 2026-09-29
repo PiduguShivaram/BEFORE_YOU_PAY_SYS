@@ -5,6 +5,11 @@
 :root {
   --background: #070b14;
   --foreground: #f8fafc;
+  --surface-card: #0d1527;
+  --surface-subtle: #101a30;
+  --surface-inset: #090e1c;
+  --border-card: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.04);
 }
 
 body {
@@ -15,35 +20,75 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Glassmorphism Surface Utility */
-.glass-panel {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+/* ── 1. SURFACE UTILITIES (PRECISE, CALM FINTECH SURFACES) ── */
+.glass-panel,
+.surface-card {
+  background-color: rgba(13, 21, 39, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+}
+
+.surface-subtle {
+  background-color: rgba(16, 26, 48, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.surface-inset {
+  background-color: rgba(9, 14, 28, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .glass-panel-hover {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .glass-panel-hover:hover {
-  background: rgba(24, 36, 62, 0.85);
-  border-color: rgba(99, 102, 241, 0.35);
-  transform: translateY(-2px);
+  background-color: rgba(18, 30, 54, 0.98);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
-/* Custom Scrollbar */
+/* ── 2. TABULAR FINANCIAL NUMBERS ── */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ── 3. ACCESSIBLE KEYBOARD FOCUS ── */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* ── 4. TOUCH TARGET MINIMUMS ── */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── 5. SAFE AREA INSETS FOR MOBILE ── */
+.safe-area-inset-bottom {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+/* ── 5. CUSTOM SCROLLBAR ── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.5);
+  background: rgba(9, 14, 28, 0.8);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.16);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(99, 102, 241, 0.5);
+  background: rgba(255, 255, 255, 0.28);
 }
+

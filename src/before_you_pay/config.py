@@ -69,11 +69,15 @@ class Settings(BaseSettings):
 
     # LLM & Inference Engine with Failover API Key Pool (Gemini / Groq)
     llm_provider: str = "gemini"
+    gemini_api_key: str | None = None
     gemini_api_key_primary: str | None = None
     gemini_api_key_fallback_1: str | None = None
     gemini_api_key_fallback_2: str | None = None
-    gemini_model: str = "gemini-flash-lite-latest"
+    gemini_model_primary: str = "gemini-3.6-flash"
+    gemini_model_fast: str = "gemini-3.1-flash-lite"
+    gemini_model: str = "gemini-3.6-flash"
 
+    groq_api_key: str | None = None
     groq_api_key_primary: str | None = None
     groq_api_key_fallback_1: str | None = None
     groq_api_key_fallback_2: str | None = None
@@ -81,30 +85,44 @@ class Settings(BaseSettings):
 
     @property
     def gemini_api_keys(self) -> list[str]:
-        """Return non-empty Gemini keys in cascading priority order."""
+        """Return unique non-empty Gemini keys in cascading priority order."""
         keys = [
             self.gemini_api_key_primary,
+            self.gemini_api_key,
             self.gemini_api_key_fallback_1,
             self.gemini_api_key_fallback_2,
         ]
-        return [k for k in keys if k and k.strip()]
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for k in keys:
+            if k and k.strip() and k not in seen:
+                seen.add(k)
+                deduped.append(k)
+        return deduped
 
     @property
     def groq_api_keys(self) -> list[str]:
-        """Return non-empty Groq keys in cascading priority order."""
+        """Return unique non-empty Groq keys in cascading priority order."""
         keys = [
             self.groq_api_key_primary,
+            self.groq_api_key,
             self.groq_api_key_fallback_1,
             self.groq_api_key_fallback_2,
         ]
-        return [k for k in keys if k and k.strip()]
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for k in keys:
+            if k and k.strip() and k not in seen:
+                seen.add(k)
+                deduped.append(k)
+        return deduped
 
     @property
     def active_llm_api_keys(self) -> list[str]:
         """Return active LLM provider keys in cascading priority order."""
-        if self.gemini_api_keys:
-            return self.gemini_api_keys
-        return self.groq_api_keys
+        if self.llm_provider.lower() == "groq":
+            return self.groq_api_keys or self.gemini_api_keys
+        return self.gemini_api_keys or self.groq_api_keys
 
 
 @lru_cache

@@ -8,8 +8,11 @@ import {
   AlertCircle,
   Sparkles,
   ArrowLeft,
-  Eye,
-  CheckCircle2,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { DecisionFlag, OcrLine } from "../lib/types";
 
@@ -32,6 +35,8 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     imagePreviewUrl ? "image" : "text"
   );
   const [inspectedLine, setInspectedLine] = useState<OcrLine | null>(null);
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [activePage, setActivePage] = useState<number>(1);
 
   // Switch to image tab automatically when an image is provided
   useEffect(() => {
@@ -40,17 +45,41 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     }
   }, [imagePreviewUrl]);
 
+  // Distinct pages detection if multi-page documents exist
+  const distinctPages = React.useMemo(() => {
+    if (!ocrLines || ocrLines.length === 0) return [1];
+    const set = new Set<number>();
+    ocrLines.forEach((l) => {
+      const p = (l as any).page_number || 1;
+      set.add(p);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [ocrLines]);
+
+  const totalPages = distinctPages.length;
+
+  // Filter OCR lines by active page if multi-page
+  const pageOcrLines = React.useMemo(() => {
+    if (!ocrLines || ocrLines.length === 0) return [];
+    if (totalPages <= 1) return ocrLines;
+    return ocrLines.filter((l) => ((l as any).page_number || 1) === activePage);
+  }, [ocrLines, activePage, totalPages]);
+
   // If structured ocrLines are provided, use them; otherwise split documentText
   const fallbackLines = documentText.split("\n").filter((l) => l.trim().length > 0);
-  const totalCount = ocrLines && ocrLines.length > 0 ? ocrLines.length : fallbackLines.length;
+  const totalCount = ocrLines && ocrLines.length > 0 ? pageOcrLines.length : fallbackLines.length;
 
   // Selected bounding box from active flag or inspected line
   const activeBoundingBoxes = selectedFlag?.bounding_boxes || (inspectedLine ? [inspectedLine.bounding_box] : []);
 
+  const handleZoomIn = () => setZoomLevel((prev) => Math.min(2.5, Math.round((prev + 0.25) * 100) / 100));
+  const handleZoomOut = () => setZoomLevel((prev) => Math.max(0.75, Math.round((prev - 0.25) * 100) / 100));
+  const handleResetZoom = () => setZoomLevel(1);
+
   return (
     <div
       id="document-evidence-viewer"
-      className="glass-panel rounded-2xl p-4 sm:p-6 shadow-card border border-white/10 space-y-4"
+      className="surface-card rounded-2xl p-4 sm:p-6 shadow-card border border-white/10 space-y-4"
     >
       {/* Header & Return Action */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
@@ -78,40 +107,103 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
         </div>
 
-        {/* Tab Switcher (Touch Target >= 44px) */}
-        {imagePreviewUrl ? (
-          <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10 self-start sm:self-auto">
-            <button
-              type="button"
-              onClick={() => setActiveTab("image")}
-              className={`min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 ${
-                activeTab === "image"
-                  ? "bg-brand-500 text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <ImageIcon className="w-3.5 h-3.5" />
-              <span>Document Scan</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("text")}
-              className={`min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 ${
-                activeTab === "text"
-                  ? "bg-brand-500 text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <AlignLeft className="w-3.5 h-3.5" />
-              <span>OCR Lines ({totalCount})</span>
-            </button>
-          </div>
-        ) : (
-          <span className="text-[11px] text-slate-400 font-mono">
-            {selectedFlag ? "Line cited in audit" : "Tap line to inspect provenance"}
-          </span>
-        )}
+        {/* Tab Switcher & Zoom Controls */}
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {imagePreviewUrl ? (
+            <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
+              <button
+                type="button"
+                onClick={() => setActiveTab("image")}
+                className={`min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 ${
+                  activeTab === "image"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>Document Scan</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("text")}
+                className={`min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 ${
+                  activeTab === "text"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <AlignLeft className="w-3.5 h-3.5" />
+                <span>OCR Lines ({totalCount})</span>
+              </button>
+            </div>
+          ) : (
+            <span className="text-[11px] text-slate-400 font-mono">
+              {selectedFlag ? "Line cited in audit" : "Tap line to inspect provenance"}
+            </span>
+          )}
+
+          {/* Zoom controls for mobile inspection */}
+          {activeTab === "image" && imagePreviewUrl && (
+            <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                disabled={zoomLevel <= 0.75}
+                className="min-h-[44px] min-w-[36px] px-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30 transition flex items-center justify-center"
+                aria-label="Zoom out"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleResetZoom}
+                className="min-h-[44px] px-2 text-[10px] font-mono text-slate-300 hover:text-white rounded-lg"
+                title="Reset Zoom"
+              >
+                {Math.round(zoomLevel * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                disabled={zoomLevel >= 2.5}
+                className="min-h-[44px] min-w-[36px] px-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30 transition flex items-center justify-center"
+                aria-label="Zoom in"
+                title="Zoom In"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Multi-Page Navigation Bar (when document has multiple pages) */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between p-2 rounded-xl bg-white/5 border border-white/10 text-xs">
+          <button
+            type="button"
+            disabled={activePage <= 1}
+            onClick={() => setActivePage((p) => Math.max(1, p - 1))}
+            className="min-h-[44px] px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-30 text-slate-200 transition flex items-center gap-1"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>Prev Page</span>
+          </button>
+          <span className="font-semibold text-slate-300">
+            Page {activePage} of {totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={activePage >= totalPages}
+            onClick={() => setActivePage((p) => Math.min(totalPages, p + 1))}
+            className="min-h-[44px] px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-30 text-slate-200 transition flex items-center gap-1"
+          >
+            <span>Next Page</span>
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Cited Field Callout (If an item is actively selected) */}
       {selectedFlag && (
@@ -133,12 +225,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       )}
 
-      {/* Main Preview Container (Mobile viewport responsive, max-w-full, no horizontal scroll) */}
-      <div className="relative rounded-xl border border-white/10 bg-slate-950/90 p-3 sm:p-4 min-h-[360px] max-h-[580px] overflow-y-auto font-mono text-xs text-slate-300 leading-relaxed shadow-inner">
+      {/* Main Preview Container with touch-action pinch-zoom support */}
+      <div
+        className="relative rounded-xl border border-white/10 bg-slate-950/90 p-3 sm:p-4 min-h-[360px] max-h-[580px] overflow-y-auto overflow-x-auto font-mono text-xs text-slate-300 leading-relaxed shadow-inner"
+        style={{ touchAction: "pan-x pan-y pinch-zoom" }}
+      >
         {activeTab === "image" && imagePreviewUrl ? (
-          <div className="relative w-full flex flex-col items-center justify-center">
-            {/* Document Image with Spatial Bounding Box Overlay */}
-            <div className="relative max-w-full inline-block rounded-lg overflow-hidden border border-white/10 bg-black/40">
+          <div className="relative w-full flex flex-col items-center justify-center overflow-auto">
+            {/* Document Image with Spatial Bounding Box Overlay & Zoom Transform */}
+            <div
+              className="relative max-w-full inline-block rounded-lg overflow-hidden border border-white/10 bg-black/40 transition-transform duration-200 origin-top"
+              style={{ transform: `scale(${zoomLevel})` }}
+            >
               <img
                 src={imagePreviewUrl}
                 alt="Uploaded Document"
@@ -171,7 +269,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
               })}
             </div>
 
-            <p className="text-[10px] text-slate-400 text-center mt-2 font-sans">
+            <p className="text-[10px] text-slate-400 text-center mt-3 font-sans">
               Spatial bounding box indicates physical position parsed by vision OCR.
             </p>
           </div>
@@ -179,9 +277,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           <div className="h-48 flex items-center justify-center text-slate-500 text-xs text-center">
             Upload a document to inspect spatial bounding boxes and physical lines.
           </div>
-        ) : ocrLines && ocrLines.length > 0 ? (
+        ) : pageOcrLines && pageOcrLines.length > 0 ? (
           <div className="flex flex-col gap-1.5">
-            {ocrLines.map((line, idx) => {
+            {pageOcrLines.map((line, idx) => {
               const isSelected = inspectedLine?.line_id === line.line_id;
               const isFlagged =
                 selectedFlag !== null &&
@@ -299,7 +397,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           <button
             type="button"
             onClick={() => setInspectedLine(null)}
-            className="text-brand-400 hover:underline"
+            className="text-brand-400 hover:underline min-h-[44px] flex items-center"
           >
             Clear line
           </button>

@@ -1,5 +1,6 @@
 """Result compilation service producing evidence-backed decision payloads with visual bounding boxes."""
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -8,6 +9,7 @@ from before_you_pay.models import (
     AnalysisState,
     BoundingBox,
     ClaimType,
+    ContextualFinding,
     DecisionFlag,
     DecisionStatus,
     DocumentClassification,
@@ -18,6 +20,7 @@ from before_you_pay.models import (
     ReasoningClaim,
     ResultSummary,
     StructuredFinancialDocument,
+    SupportingDocumentAnalysis,
     ValidationCheck,
     ValidationSeverity,
     ValidationStatus,
@@ -38,6 +41,10 @@ class ResultAggregatorService:
         ocr_lines: list[OcrLine] | None = None,
         ocr_quality: OCRQualityResult | None = None,
         analysis_state: AnalysisState | None = None,
+        supporting_document_context: dict[str, Any] | None = None,
+        contextual_findings: list[ContextualFinding] | None = None,
+        supporting_document_analysis: SupportingDocumentAnalysis | None = None,
+        pipeline_metrics: dict[str, Any] | None = None,
     ) -> FinalDecisionSupportResult:
         """Construct FinalDecisionSupportResult with tap-to-source bounding boxes."""
         # Index all extracted fields for fast bounding-box lookup
@@ -82,9 +89,15 @@ class ResultAggregatorService:
         for check in validation_checks:
             if check.status == ValidationStatus.FAIL:
                 # Deduplicate: if both QUOTATION_SUBTOTAL_CONSISTENCY and ARITHMETIC_LINE_ITEMS_SUM fail on the same component discrepancy, only create one flag
-                if check.check_code == "ARITHMETIC_LINE_ITEMS_SUM" and "QUOTATION_SUBTOTAL_CONSISTENCY" in seen_failed_codes:
+                if (
+                    check.check_code == "ARITHMETIC_LINE_ITEMS_SUM"
+                    and "QUOTATION_SUBTOTAL_CONSISTENCY" in seen_failed_codes
+                ):
                     continue
-                if check.check_code == "QUOTATION_SUBTOTAL_CONSISTENCY" and "ARITHMETIC_LINE_ITEMS_SUM" in seen_failed_codes:
+                if (
+                    check.check_code == "QUOTATION_SUBTOTAL_CONSISTENCY"
+                    and "ARITHMETIC_LINE_ITEMS_SUM" in seen_failed_codes
+                ):
                     continue
                 seen_failed_codes.add(check.check_code)
 
@@ -125,7 +138,11 @@ class ResultAggregatorService:
             )
 
         # 3. Determine overall status and headline based on substantive review findings
-        review_flags = [f for f in flags if f.severity in (ValidationSeverity.WARNING, ValidationSeverity.CRITICAL)]
+        review_flags = [
+            f
+            for f in flags
+            if f.severity in (ValidationSeverity.WARNING, ValidationSeverity.CRITICAL)
+        ]
         has_critical_failure = any(f.severity == ValidationSeverity.CRITICAL for f in review_flags)
         has_warning = any(f.severity == ValidationSeverity.WARNING for f in review_flags)
         has_no_financial_check = any(
@@ -135,7 +152,10 @@ class ResultAggregatorService:
 
         total_val = float(document.total_amount.normalized_value) if document.total_amount else 0.0
         has_monetary_content = (
-            total_val > 0.0 or len(document.line_items) > 0 or len(document.fees) > 0 or len(document.cost_breakdown) > 0
+            total_val > 0.0
+            or len(document.line_items) > 0
+            or len(document.fees) > 0
+            or len(document.cost_breakdown) > 0
         )
 
         if analysis_state is None:
@@ -155,8 +175,14 @@ class ResultAggregatorService:
             headline = f"Review Recommended: {len(review_flags)} item{'s' if len(review_flags) > 1 else ''} require{'s' if len(review_flags) == 1 else ''} attention or verification."
         else:
             overall_status = DecisionStatus.CLEAR
-            if document.document_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN) or document.cost_breakdown:
-                headline = "Quotation verified: All charges and applied offers mathematically reconcile."
+            if (
+                document.document_type
+                in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
+                or document.cost_breakdown
+            ):
+                headline = (
+                    "Quotation verified: All charges and applied offers mathematically reconcile."
+                )
             else:
                 headline = "All verified: Stated totals and contract terms align with expectations."
 
@@ -169,6 +195,101 @@ class ResultAggregatorService:
             ocr_quality=ocr_quality,
         )
 
+        # ── Phase 4: Extra Cost and Cost-Reduction Analysis ──
+        extra_cost_payload = None
+        eca_result = None
+        if document.cost_breakdown:
+            from before_you_pay.services.extra_cost_analysis import ExtraCostAnalysisService
+
+            eca_result = ExtraCostAnalysisService.analyze(list(document.cost_breakdown))
+            extra_cost_payload = {
+                "flagged_costs": [asdict(f) for f in eca_result.flagged_costs],
+                "total_potential_reduction": eca_result.total_potential_reduction,
+                "total_flagged_count": eca_result.total_flagged_count,
+                "total_charges_analyzed": eca_result.total_charges_analyzed,
+                "reduction_summary": eca_result.reduction_summary,
+            }
+
+        # ── Phase 5 & Phase 3: Cost Review & Smart Cost-Reduction Questions ──
+        from before_you_pay.services.cost_review_questions import CostReviewQuestionsService
+
+        smart_questions = CostReviewQuestionsService.generate_smart_questions(
+            cost_breakdown=list(document.cost_breakdown) if document.cost_breakdown else [],
+            extra_cost_analysis=eca_result,
+            validation_checks=validation_checks,
+            document=document,
+            contextual_findings=contextual_findings,
+        )
+
+        # ── Phase 7: Potential Cost Reduction Summary ──
+        cost_reduction_summary = None
+        if document.cost_breakdown:
+            from before_you_pay.services.cost_reduction import PotentialCostReductionService
+
+            cost_reduction_summary = PotentialCostReductionService.calculate_summary(
+                list(document.cost_breakdown)
+            )
+
+        # ── Phase 8: Plain-Language Financial Explanation ──
+        from before_you_pay.services.plain_language_explanation import (
+            PlainLanguageExplanationService,
+        )
+
+        plain_language_explanation = PlainLanguageExplanationService.generate_explanation(
+            document=document,
+            validation_checks=validation_checks,
+            smart_questions=smart_questions,
+        )
+
+        suggested_message = CostReviewQuestionsService.generate_suggested_negotiation_message(
+            questions=smart_questions,
+            document=document,
+            contextual_findings=contextual_findings,
+        )
+        if plain_language_explanation and suggested_message:
+            plain_language_explanation = plain_language_explanation.model_copy(
+                update={"suggested_negotiation_message": suggested_message}
+            )
+
+        # ── Phase 4: Semantic Financial Relationships ──
+        semantic_financial_structure = None
+        if document:
+            from before_you_pay.services.semantic_relationships import SemanticRelationshipService
+
+            structure_obj = SemanticRelationshipService.analyze_document(document)
+            semantic_financial_structure = structure_obj.to_dict()
+
+        # ── Phase 6: Before You Pay Final Decision Summary ──
+        before_you_pay_summary = None
+        if document:
+            from before_you_pay.services.decision_summary import BeforeYouPayDecisionSummaryService
+
+            summary_obj = BeforeYouPayDecisionSummaryService.build_summary(
+                document=document,
+                validation_checks=validation_checks,
+                flags=flags,
+                smart_questions=smart_questions,
+                contextual_findings=contextual_findings or [],
+                suggested_message=suggested_message,
+                supporting_document_analysis=supporting_document_analysis,
+            )
+            before_you_pay_summary = summary_obj.to_dict()
+
+        # ── Phase 7: Evidence-First Explainability ──
+        evidence_first_result = None
+        if document:
+            from before_you_pay.services.evidence import EvidenceFirstService
+
+            evidence_first_result_obj = EvidenceFirstService.build_evidence_result(
+                result_id=uuid4(),
+                document=document,
+                validation_checks=validation_checks,
+                flags=flags,
+                contextual_findings=contextual_findings or [],
+                smart_questions=smart_questions,
+            )
+            evidence_first_result = evidence_first_result_obj.model_dump(mode="json")
+
         return FinalDecisionSupportResult(
             result_id=uuid4(),
             document_id=document_id,
@@ -178,10 +299,22 @@ class ResultAggregatorService:
             reasoning_claims=reasoning_claims,
             validation_checks=validation_checks,
             document=document,
+            extra_cost_analysis=extra_cost_payload,
+            smart_questions=smart_questions,
+            cost_reduction_summary=cost_reduction_summary,
+            plain_language_explanation=plain_language_explanation,
+            suggested_negotiation_message=suggested_message,
+            supporting_document_context=supporting_document_context,
+            contextual_findings=contextual_findings or [],
+            supporting_document_analysis=supporting_document_analysis,
             raw_ocr_lines=raw_ocr_lines or [],
             ocr_lines=ocr_lines or [],
             analysis_state=analysis_state,
             ocr_quality=ocr_quality,
+            semantic_financial_structure=semantic_financial_structure,
+            before_you_pay_summary=before_you_pay_summary,
+            evidence_first_result=evidence_first_result,
+            pipeline_metrics=pipeline_metrics,
             generated_at=datetime.now(UTC),
         )
 
@@ -192,6 +325,7 @@ class ResultAggregatorService:
         ocr_result: Any,
         ocr_quality: OCRQualityResult,
         analysis_state: AnalysisState = AnalysisState.OCR_UNRELIABLE,
+        pipeline_metrics: dict[str, Any] | None = None,
     ) -> FinalDecisionSupportResult:
         """Compile safe, evidence-grounded result when OCR is corrupted or document is unreadable."""
         is_empty = (
@@ -244,6 +378,7 @@ class ResultAggregatorService:
             ocr_lines=all_lines,
             analysis_state=analysis_state,
             ocr_quality=ocr_quality,
+            pipeline_metrics=pipeline_metrics,
             generated_at=datetime.now(UTC),
         )
 

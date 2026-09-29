@@ -21,7 +21,9 @@ class OkfCatalogService:
                 Path.cwd() / "frontend" / "data" / "okf",
                 raw_p,
             ]
-            self.catalog_path = next((c for c in candidates if c.exists() and list(c.glob("*.json"))), raw_p)
+            self.catalog_path = next(
+                (c for c in candidates if c.exists() and list(c.glob("*.json"))), raw_p
+            )
         self._rules: dict[str, OkfRuleEvidence] = {}
         self._file_mtimes: dict[str, float] = {}
         self._load_catalog()

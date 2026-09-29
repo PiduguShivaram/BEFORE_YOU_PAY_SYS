@@ -218,6 +218,82 @@ class TestReasoningToneAndLanguageGuardrails:
                 confidence=0.9,
             )
 
+        # Test "guaranteed savings" rejection
+        with pytest.raises(
+            ValidationError,
+            match="ReasoningClaim contains prohibited language 'guaranteed savings'",
+        ):
+            ReasoningClaim(
+                claim_id=uuid4(),
+                type=ClaimType.TERM_REQUIRING_ATTENTION,
+                title="Savings claim",
+                description="This option provides guaranteed savings of 20%.",
+                field_references=[uuid4()],
+                confidence=0.9,
+            )
+
+        # Test "safe to buy" rejection
+        with pytest.raises(
+            ValidationError, match="ReasoningClaim contains prohibited language 'safe to buy'"
+        ):
+            ReasoningClaim(
+                claim_id=uuid4(),
+                type=ClaimType.TERM_REQUIRING_ATTENTION,
+                title="Safety assessment",
+                description="This contract is safe to buy without concerns.",
+                field_references=[uuid4()],
+                confidence=0.9,
+            )
+
+        # Test "you should not buy" rejection
+        with pytest.raises(
+            ValidationError,
+            match="ReasoningClaim contains prohibited language 'you should not buy'",
+        ):
+            ReasoningClaim(
+                claim_id=uuid4(),
+                type=ClaimType.TERM_REQUIRING_ATTENTION,
+                title="Purchase advice",
+                description="We conclude that you should not buy this product.",
+                field_references=[uuid4()],
+                confidence=0.9,
+            )
+
+    def test_decision_flag_prohibited_terms_rejected(self) -> None:
+        """Verify DecisionFlag rejects prohibited recommendation phrases."""
+        from before_you_pay.models import DecisionFlag
+
+        with pytest.raises(
+            ValidationError, match="DecisionFlag contains prohibited language 'good deal'"
+        ):
+            DecisionFlag(
+                claim_type=ClaimType.POTENTIAL_ISSUE,
+                label="Offer review",
+                message="This is a good deal for the customer.",
+            )
+
+        with pytest.raises(
+            ValidationError, match="DecisionFlag contains prohibited language 'scam'"
+        ):
+            DecisionFlag(
+                claim_type=ClaimType.POTENTIAL_ISSUE,
+                label="Flag",
+                message="Identified potential scam charge.",
+            )
+
+    def test_result_summary_prohibited_terms_rejected(self) -> None:
+        """Verify ResultSummary rejects prohibited phrases in headline."""
+        from before_you_pay.models import DecisionStatus, ResultSummary
+
+        with pytest.raises(
+            ValidationError, match="ResultSummary contains prohibited language 'guaranteed savings'"
+        ):
+            ResultSummary(
+                headline="Review reveals guaranteed savings for you.",
+                overall_status=DecisionStatus.REQUIRES_ATTENTION,
+                total_flags=1,
+            )
+
 
 class TestModelSerializationRoundtrip:
     """Test suite ensuring lossless JSON serialization and deserialization."""

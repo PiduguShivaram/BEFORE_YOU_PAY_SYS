@@ -6,6 +6,7 @@ to invent missing amounts or guess unevidenced categories.
 """
 
 from uuid import uuid4
+
 import pytest
 
 from before_you_pay.models import (
@@ -18,7 +19,6 @@ from before_you_pay.models import (
     OcrLine,
     OcrPage,
     OcrResult,
-    OptionalityStatus,
 )
 from before_you_pay.services.extraction import FinancialExtractionEngine
 from before_you_pay.services.financial_taxonomy import (
@@ -100,12 +100,12 @@ class TestPhase1ImperfectFinancialLabelNormalization:
             ("Ext Warranty", "Extended Warranty"),
         ],
     )
-    def test_imperfect_label_normalization_examples(
-        self, raw_input: str, expected_normalized: str
-    ):
+    def test_imperfect_label_normalization_examples(self, raw_input: str, expected_normalized: str):
         """Test normalize_financial_label converts imperfect OCR labels to clean labels."""
         normalized = normalize_financial_label(raw_input)
-        assert normalized == expected_normalized, f"Expected {expected_normalized} for {raw_input}, got {normalized}"
+        assert normalized == expected_normalized, (
+            f"Expected {expected_normalized} for {raw_input}, got {normalized}"
+        )
 
     def test_fix_ocr_letter_digit_noise(self):
         """Test OCR digit and character corruption cleanup."""
@@ -129,8 +129,12 @@ class TestPhase1EvidencePreservation:
         doc_id = uuid4()
         page_id = uuid4()
         box = BoundingBox(x=0.05, y=0.10, width=0.80, height=0.03)
-        line = _make_line("EX-SHOWR00M: ₹11,49,900", doc_id=doc_id, page_id=page_id, box=box, confidence=0.88)
-        amt_field = _make_amount_field(1149900.0, "EX-SHOWR00M: ₹11,49,900", line.line_id, doc_id, page_id, box, conf=0.91)
+        line = _make_line(
+            "EX-SHOWR00M: ₹11,49,900", doc_id=doc_id, page_id=page_id, box=box, confidence=0.88
+        )
+        amt_field = _make_amount_field(
+            1149900.0, "EX-SHOWR00M: ₹11,49,900", line.line_id, doc_id, page_id, box, conf=0.91
+        )
 
         comp = FinancialComponent(
             raw_text="EX-SHOWR00M",
@@ -251,15 +255,34 @@ class TestPhase1StrictGuardrails:
 
         lines = [
             _make_line("QUOTATION", doc_id=doc_id, page_id=page_id, line_num=1),
-            _make_line("Registration charges applicable as per state rules", doc_id=doc_id, page_id=page_id, line_num=2),
+            _make_line(
+                "Registration charges applicable as per state rules",
+                doc_id=doc_id,
+                page_id=page_id,
+                line_num=2,
+            ),
             _make_line("Total 500000", doc_id=doc_id, page_id=page_id, line_num=3),
         ]
         ocr_res = OcrResult(
             document_id=doc_id,
             engine_name="test_engine",
-            pages=[OcrPage(document_id=doc_id, page_number=1, page_id=page_id, width=1000, height=1400, lines=lines)],
+            pages=[
+                OcrPage(
+                    document_id=doc_id,
+                    page_number=1,
+                    page_id=page_id,
+                    width=1000,
+                    height=1400,
+                    lines=lines,
+                )
+            ],
         )
-        doc = svc.extract(document_id=doc_id, user_id=user_id, ocr_result=ocr_res, document_type_hint=DocumentClassification.QUOTATION)
+        doc = svc.extract(
+            document_id=doc_id,
+            user_id=user_id,
+            ocr_result=ocr_res,
+            document_type_hint=DocumentClassification.QUOTATION,
+        )
 
         # The line without amount should NOT have generated a FinancialComponent with an invented amount
         reg_comps = [c for c in doc.cost_breakdown if "applicable as per state" in c.raw_name]
@@ -284,7 +307,9 @@ class TestPhase1StrictGuardrails:
         page_id = uuid4()
         box = BoundingBox(x=0.05, y=0.10, width=0.80, height=0.03)
         line = _make_line("MYSTERY_LEVY 4500", doc_id=doc_id, page_id=page_id, box=box)
-        amt_field = _make_amount_field(4500.0, "MYSTERY_LEVY 4500", line.line_id, doc_id, page_id, box)
+        amt_field = _make_amount_field(
+            4500.0, "MYSTERY_LEVY 4500", line.line_id, doc_id, page_id, box
+        )
 
         comp = FinancialComponent(
             name="MYSTERY_LEVY",
@@ -317,10 +342,24 @@ class TestPhase1StrictGuardrails:
         ocr_res = OcrResult(
             document_id=doc_id,
             engine_name="test_engine",
-            pages=[OcrPage(document_id=doc_id, page_number=1, page_id=page_id, width=1000, height=1400, lines=ocr_lines)],
+            pages=[
+                OcrPage(
+                    document_id=doc_id,
+                    page_number=1,
+                    page_id=page_id,
+                    width=1000,
+                    height=1400,
+                    lines=ocr_lines,
+                )
+            ],
         )
 
-        doc = svc.extract(document_id=doc_id, user_id=user_id, ocr_result=ocr_res, document_type_hint=DocumentClassification.QUOTATION)
+        doc = svc.extract(
+            document_id=doc_id,
+            user_id=user_id,
+            ocr_result=ocr_res,
+            document_type_hint=DocumentClassification.QUOTATION,
+        )
 
         # Verify extracted cost components
         by_label = {c.normalized_label: c for c in doc.cost_breakdown}

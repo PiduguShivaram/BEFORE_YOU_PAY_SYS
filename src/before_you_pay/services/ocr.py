@@ -35,8 +35,14 @@ class SpatialOcrEngine:
         start_time = time.monotonic()
         normalized_mime = mime_type.lower().split(";")[0].strip()
 
+        is_binary = file_bytes.startswith(
+            (b"\x89PNG", b"\xff\xd8\xff", b"GIF", b"RIFF", b"%PDF", b"BM")
+        )
+
         if normalized_mime == "application/pdf":
             pages, engine_used = await self._process_pdf(document_id, file_bytes)
+        elif normalized_mime in ("text/plain", "text/csv", "application/json") or not is_binary:
+            pages, engine_used = await self._process_text_stream(document_id, file_bytes)
         else:
             pages, engine_used = await self._process_image(document_id, file_bytes)
 
@@ -64,9 +70,14 @@ class SpatialOcrEngine:
 
         # Trigger Multi-Pass Recovery for images if quality is degraded/unreliable or lacks financial digits
         if (
-            quality.status != OCRQualityStatus.GOOD
-            or not self._has_meaningful_financial_content(initial_result)
-        ) and normalized_mime != "application/pdf":
+            (
+                quality.status != OCRQualityStatus.GOOD
+                or not self._has_meaningful_financial_content(initial_result)
+            )
+            and normalized_mime
+            not in ("application/pdf", "text/plain", "text/csv", "application/json")
+            and is_binary
+        ):
             final_result = await self._attempt_recovery_passes(
                 document_id, file_bytes, initial_result, quality
             )
@@ -160,7 +171,10 @@ class SpatialOcrEngine:
                     if q2.score > best_quality.score:
                         best_result = res_p2
                         best_quality = q2
-                    if q2.status == OCRQualityStatus.GOOD and self._has_meaningful_financial_content(res_p2):
+                    if (
+                        q2.status == OCRQualityStatus.GOOD
+                        and self._has_meaningful_financial_content(res_p2)
+                    ):
                         return best_result
             except Exception:
                 pass
@@ -198,7 +212,10 @@ class SpatialOcrEngine:
                 pass
 
         # --- PASS 4: Multimodal Vision OCR (Cross-platform production engine) ---
-        if best_quality.status != OCRQualityStatus.GOOD or not self._has_meaningful_financial_content(best_result):
+        if (
+            best_quality.status != OCRQualityStatus.GOOD
+            or not self._has_meaningful_financial_content(best_result)
+        ):
             try:
                 p4_pages = await self._vision_ocr_pass(document_id, file_bytes)
                 if p4_pages and p4_pages[0].lines:
@@ -222,7 +239,9 @@ class SpatialOcrEngine:
                         recovery_pass=4,
                         quality=q4,
                     )
-                    if q4.score > best_quality.score or self._has_meaningful_financial_content(res_p4):
+                    if q4.score > best_quality.score or self._has_meaningful_financial_content(
+                        res_p4
+                    ):
                         best_result = res_p4
                         best_quality = q4
                     if q4.status in (OCRQualityStatus.GOOD, OCRQualityStatus.MODERATE):
@@ -282,15 +301,18 @@ class SpatialOcrEngine:
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0.0,
+                "maxOutputTokens": 8192,
             },
         }
 
         # Candidate models to try in cascading order
         models = [
             settings.gemini_model,
-            "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
+            getattr(settings, "gemini_model_primary", "gemini-3.6-flash"),
+            getattr(settings, "gemini_model_fast", "gemini-3.1-flash-lite"),
+            "gemini-3.6-flash",
             "gemini-3.1-flash-lite",
+            "gemini-flash-lite-latest",
         ]
         unique_models = []
         for m in models:
@@ -298,20 +320,33 @@ class SpatialOcrEngine:
                 unique_models.append(m)
 
         import asyncio
+        import re
 
         for attempt in range(2):
+            all_rate_limited = True
             for key in keys:
+                key_rate_limited = False
                 for model in unique_models:
                     url = (
                         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
                         f"?key={key}"
                     )
                     try:
-                        async with httpx.AsyncClient(timeout=40.0) as client:
+                        async with httpx.AsyncClient(timeout=30.0) as client:
                             resp = await client.post(url, json=payload)
-                            if resp.status_code in (429, 503):
-                                logger.info("Model %s rate-limited (%d), trying next...", model, resp.status_code)
-                                await asyncio.sleep(0.5)
+                            if resp.status_code in (502, 503):
+                                logger.info(
+                                    "Model %s unavailable/overloaded (%d), trying next model candidate...",
+                                    model,
+                                    resp.status_code,
+                                )
+                                continue
+                            if resp.status_code == 429:
+                                logger.info(
+                                    "Model %s rate-limited (429), trying next model candidate on key...",
+                                    model,
+                                )
+                                key_rate_limited = True
                                 continue
                             if resp.status_code == 404:
                                 continue  # model not available, try next model
@@ -324,15 +359,22 @@ class SpatialOcrEngine:
                                 continue
 
                             raw_text = candidates[0]["content"]["parts"][0]["text"].strip()
-                            if raw_text.startswith("```json"):
-                                raw_text = raw_text[7:]
-                            if raw_text.startswith("```"):
-                                raw_text = raw_text[3:]
-                            if raw_text.endswith("```"):
-                                raw_text = raw_text[:-3]
-                            raw_text = raw_text.strip()
+                            raw_text = re.sub(
+                                r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE
+                            )
+                            raw_text = re.sub(r"\s*```$", "", raw_text).strip()
 
-                            parsed_lines = json.loads(raw_text)
+                            try:
+                                parsed_lines = json.loads(raw_text)
+                            except Exception:
+                                fixed_text = re.sub(r",\s*$", "", raw_text.strip())
+                                if not fixed_text.endswith("]"):
+                                    fixed_text += "]"
+                                try:
+                                    parsed_lines = json.loads(fixed_text)
+                                except Exception:
+                                    continue
+
                             if not isinstance(parsed_lines, list) or not parsed_lines:
                                 continue
 
@@ -344,7 +386,12 @@ class SpatialOcrEngine:
                                     continue
                                 box = item.get("box_2d") or item.get("box") or [0, 0, 1000, 1000]
                                 try:
-                                    ymin, xmin, ymax, xmax = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+                                    ymin, xmin, ymax, xmax = (
+                                        float(box[0]),
+                                        float(box[1]),
+                                        float(box[2]),
+                                        float(box[3]),
+                                    )
                                 except (ValueError, TypeError, IndexError):
                                     ymin, xmin, ymax, xmax = 0.0, 0.0, 1000.0, 1000.0
                                 x_norm = max(0.0, min(0.99, xmin / 1000.0))
@@ -387,6 +434,14 @@ class SpatialOcrEngine:
                     except Exception as e:
                         logger.warning("Error during Vision OCR request: %s", e)
                         continue
+                if not key_rate_limited:
+                    all_rate_limited = False
+
+            if all_rate_limited:
+                logger.info(
+                    "All Gemini Vision OCR keys rate-limited (429/503), fast-failing to deterministic fallback..."
+                )
+                break
 
             if attempt == 0:
                 await asyncio.sleep(2.0)
@@ -645,8 +700,67 @@ class SpatialOcrEngine:
 
         return await self._process_image(document_id, file_bytes)
 
-    async def _process_image(self, document_id: UUID, file_bytes: bytes) -> tuple[list[OcrPage], str]:
-        """Process image file with platform-specific OCR (winocr on Windows, Vision OCR on Linux/Vercel)."""
+    async def _process_text_stream(
+        self, document_id: UUID, file_bytes: bytes
+    ) -> tuple[list[OcrPage], str]:
+        """Extract lines directly from raw UTF-8 text streams (for synthetic tests or text uploads)."""
+        decoded_text = ""
+        try:
+            decoded_text = file_bytes.decode("utf-8", errors="ignore")
+        except Exception:
+            decoded_text = ""
+
+        page_id = uuid4()
+        lines: list[OcrLine] = []
+        candidate_lines = [
+            ln.strip()
+            for ln in decoded_text.splitlines()
+            if len(ln.strip()) > 1 and any(c.isalnum() for c in ln)
+        ]
+
+        if candidate_lines:
+            total_lines = len(candidate_lines)
+            line_height_norm = min(0.04, 0.80 / max(total_lines, 1))
+
+            for idx, line_text in enumerate(candidate_lines[:40], start=1):
+                y_pos = min(0.92, 0.05 + (idx - 1) * (line_height_norm * 1.15))
+                box = BoundingBox(
+                    x=0.08,
+                    y=y_pos,
+                    width=0.84,
+                    height=line_height_norm,
+                    coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
+                )
+                lines.append(
+                    OcrLine(
+                        line_id=uuid4(),
+                        page_id=page_id,
+                        document_id=document_id,
+                        line_number=idx,
+                        text=line_text,
+                        raw_text=line_text,
+                        bounding_box=box,
+                        confidence=0.95,
+                    )
+                )
+
+        page_result = [
+            OcrPage(
+                page_id=page_id,
+                document_id=document_id,
+                page_number=1,
+                width=1000,
+                height=1400,
+                dpi=300,
+                lines=lines,
+            )
+        ]
+        return page_result, "text_stream_ocr"
+
+    async def _process_image(
+        self, document_id: UUID, file_bytes: bytes
+    ) -> tuple[list[OcrPage], str]:
+        """Process image file with production Vision OCR (or winocr if offline/local)."""
         img = None
         width, height = 1080, 1920
         try:
@@ -660,7 +774,40 @@ class SpatialOcrEngine:
         lines: list[OcrLine] = []
         engine_used = self.engine_name
 
-        # 1. Native Windows OCR on real image pixels (local Windows path)
+        from before_you_pay.config import get_settings
+
+        settings = get_settings()
+
+        # 1. Production Vision OCR (Primary path when API keys are configured, matches Linux/Cloud runtime)
+        if settings.gemini_api_keys:
+            try:
+                send_bytes = file_bytes
+                if img is not None:
+                    if img.mode != "RGB":
+                        bg = Image.new("RGB", img.size, (255, 255, 255))
+                        alpha_img = img.convert("RGBA") if img.mode != "RGBA" else img
+                        bg.paste(alpha_img, mask=alpha_img.split()[-1])
+                        rgb_img = bg
+                    else:
+                        rgb_img = img
+
+                    max_dim = max(rgb_img.size)
+                    if max_dim > 2400:
+                        scale = 2400.0 / max_dim
+                        new_size = (int(rgb_img.width * scale), int(rgb_img.height * scale))
+                        rgb_img = rgb_img.resize(new_size, Image.Resampling.LANCZOS)
+
+                    buf = io.BytesIO()
+                    rgb_img.save(buf, format="PNG", optimize=True)
+                    send_bytes = buf.getvalue()
+
+                vision_pages = await self._vision_ocr_pass(document_id, send_bytes)
+                if vision_pages and vision_pages[0].lines:
+                    return vision_pages, "gemini_vision_ocr"
+            except Exception as e:
+                logger.warning("Vision OCR failed, falling back to local OCR: %s", e)
+
+        # 2. Native Windows OCR on real image pixels (offline/local Windows path)
         if img is not None and sys.platform == "win32":
             try:
                 import winocr
@@ -695,83 +842,12 @@ class SpatialOcrEngine:
             except Exception as e:
                 logger.debug("Local winocr unavailable or failed: %s", e)
 
-        # 2. Production Vision OCR (for Linux/Vercel or Windows fallback when winocr is missing/scrambled)
-        if not lines:
-            try:
-                send_bytes = file_bytes
-                if img is not None:
-                    if img.mode != "RGB":
-                        bg = Image.new("RGB", img.size, (255, 255, 255))
-                        alpha_img = img.convert("RGBA") if img.mode != "RGBA" else img
-                        bg.paste(alpha_img, mask=alpha_img.split()[-1])
-                        rgb_img = bg
-                    else:
-                        rgb_img = img
-
-                    # Downscale only if excessively large (> 2400px) to preserve fine digits
-                    max_dim = max(rgb_img.size)
-                    if max_dim > 2400:
-                        scale = 2400.0 / max_dim
-                        new_size = (int(rgb_img.width * scale), int(rgb_img.height * scale))
-                        rgb_img = rgb_img.resize(new_size, Image.Resampling.LANCZOS)
-
-                    buf = io.BytesIO()
-                    rgb_img.save(buf, format="PNG", optimize=True)
-                    send_bytes = buf.getvalue()
-
-                vision_pages = await self._vision_ocr_pass(document_id, send_bytes)
-                if vision_pages and vision_pages[0].lines:
-                    lines = vision_pages[0].lines
-                    width = vision_pages[0].width
-                    height = vision_pages[0].height
-                    engine_used = "gemini_vision_ocr"
-            except Exception as e:
-                logger.warning("Vision OCR failed: %s", e)
-
         # 3. Text payload fallback (for UTF-8 text streams or plain text test uploads, NOT binary images)
         is_binary_image = file_bytes.startswith(
             (b"\x89PNG", b"\xff\xd8\xff", b"GIF", b"RIFF", b"%PDF", b"BM")
         )
         if not lines and not is_binary_image:
-            decoded_text = ""
-            try:
-                decoded_text = file_bytes.decode("utf-8", errors="ignore")
-            except Exception:
-                decoded_text = ""
-
-            candidate_lines = [
-                ln.strip()
-                for ln in decoded_text.splitlines()
-                if len(ln.strip()) > 1 and any(c.isalnum() for c in ln)
-            ]
-
-            if candidate_lines:
-                total_lines = len(candidate_lines)
-                line_height_norm = min(0.04, 0.80 / max(total_lines, 1))
-
-                for idx, line_text in enumerate(candidate_lines[:40], start=1):
-                    y_pos = min(0.92, 0.05 + (idx - 1) * (line_height_norm * 1.15))
-                    box = BoundingBox(
-                        x=0.08,
-                        y=y_pos,
-                        width=0.84,
-                        height=line_height_norm,
-                        coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
-                    )
-                    lines.append(
-                        OcrLine(
-                            line_id=uuid4(),
-                            page_id=page_id,
-                            document_id=document_id,
-                            line_number=idx,
-                            text=line_text,
-                            raw_text=line_text,
-                            bounding_box=box,
-                            confidence=0.95,
-                        )
-                    )
-                if lines:
-                    engine_used = "text_stream_ocr"
+            return await self._process_text_stream(document_id, file_bytes)
 
         page_result = [
             OcrPage(

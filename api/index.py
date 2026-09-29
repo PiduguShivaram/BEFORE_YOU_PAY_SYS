@@ -8,6 +8,7 @@ rules in ``vercel.json``.
 
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode
 
 _possible_dirs = [
     Path(__file__).resolve().parent.parent / "src",
@@ -26,9 +27,6 @@ else:
         sys.path.insert(0, str(fallback))
 
 from before_you_pay.main import app as _fastapi_app  # noqa: E402
-
-
-from urllib.parse import parse_qs, urlencode
 
 
 async def app(scope, receive, send):

@@ -9,12 +9,12 @@ Covers:
 - Integration into ResultAggregatorService
 """
 
-import pytest
 from uuid import uuid4
+
+import pytest
 
 from before_you_pay.models.analysis import (
     PotentialCostReductionSummary,
-    ReductionTierItem,
 )
 from before_you_pay.models.document import (
     BoundingBox,

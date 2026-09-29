@@ -133,3 +133,31 @@ class TestDocumentUploadAndAnalyze:
         stages_observed = [e for e in events if "stage" in e]
         assert any("precondition" in s for s in stages_observed)
         assert any("complete" in s for s in stages_observed)
+
+    def test_real_uploaded_asset_e2e_api(self, client: TestClient, sample_user_id: UUID) -> None:
+        """Verify actual uploaded binary file through real /analyze API endpoint into canonical response."""
+        import os
+
+        asset_path = os.path.join(
+            os.path.dirname(__file__), "assets", "sample-bill-format-769x1024.png"
+        )
+        if not os.path.exists(asset_path):
+            return
+
+        with open(asset_path, "rb") as f:
+            file_bytes = f.read()
+
+        files = {"file": ("sample-bill.png", io.BytesIO(file_bytes), "image/png")}
+        data = {"user_id": str(sample_user_id), "document_classification": "bill"}
+
+        response = client.post("/api/v1/analyze", data=data, files=files)
+        assert response.status_code == 200
+        res = response.json()
+        assert res["document_id"] is not None
+        assert res["document"] is not None
+        assert (
+            res["document"]["vendor_name"]["normalized_value"] == "Zetran Technologies Pvt., Ltd."
+        )
+        assert float(res["document"]["total_amount"]["normalized_value"]) == 29996.0
+        assert len(res["document"]["line_items"]) == 3
+        assert len(res["validation_checks"]) >= 5

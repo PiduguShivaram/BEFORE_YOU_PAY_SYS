@@ -36,7 +36,11 @@ def _make_provenance(raw_text: str = "Component: 1000") -> FieldProvenance:
         page_id=uuid4(),
         ocr_line_ids=[uuid4()],
         bounding_box=BoundingBox(
-            x=0.1, y=0.15, width=0.45, height=0.03, coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE
+            x=0.1,
+            y=0.15,
+            width=0.45,
+            height=0.03,
+            coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
         ),
         raw_text=raw_text,
     )
@@ -157,9 +161,7 @@ class TestSemanticComponentClassification:
             ("Essential Kit", ComponentCategory.ACCESSORY_PACKAGE),
         ],
     )
-    def test_accessories_and_packages(
-        self, raw_text: str, expected_category: ComponentCategory
-    ):
+    def test_accessories_and_packages(self, raw_text: str, expected_category: ComponentCategory):
         cat, _, _, opt, _ = classify_component_name(raw_text)
         assert cat == expected_category
         assert opt == "optional"
@@ -175,7 +177,11 @@ class TestSemanticComponentClassification:
             ("Freight Charges", ComponentCategory.LOGISTICS_FEE, "Logistics charges"),
             ("Processing", ComponentCategory.PROCESSING_FEE, "Processing / documentation fee"),
             ("Processing Fee", ComponentCategory.PROCESSING_FEE, "Processing / documentation fee"),
-            ("Documentation Charges", ComponentCategory.PROCESSING_FEE, "Processing / documentation fee"),
+            (
+                "Documentation Charges",
+                ComponentCategory.PROCESSING_FEE,
+                "Processing / documentation fee",
+            ),
             ("Doc Charges", ComponentCategory.PROCESSING_FEE, "Processing / documentation fee"),
         ],
     )

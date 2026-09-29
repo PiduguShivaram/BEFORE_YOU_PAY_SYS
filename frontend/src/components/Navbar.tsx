@@ -110,11 +110,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
               ) : (
                 <button
+                  type="button"
                   onClick={() => setIsEditingUser(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 transition"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 transition cursor-pointer"
                   title="Click to edit Tenant User ID"
+                  aria-label={`User: ${userId}`}
                 >
-                  <User className="w-3.5 h-3.5 text-slate-400" />
+                  <User className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden="true" />
                   <span className="font-mono text-slate-400">User:</span>
                   <span className="font-mono text-white font-semibold">{userId.slice(0, 8)}...</span>
                 </button>
@@ -122,10 +124,12 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               {/* Past Records RAG */}
               <button
+                type="button"
                 onClick={onOpenRag}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-brand-500/40 transition"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-brand-500/40 transition cursor-pointer"
+                aria-label={`Past Records (${ragCount})`}
               >
-                <Database className="w-3.5 h-3.5 text-brand-400" />
+                <Database className="w-3.5 h-3.5 text-brand-400 shrink-0" aria-hidden="true" />
                 <span>Past Records</span>
                 <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-brand-500/20 text-brand-300">
                   {ragCount}
@@ -134,10 +138,12 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               {/* OKF Rules */}
               <button
+                type="button"
                 onClick={onOpenOkf}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-brand-500/40 transition"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-brand-500/40 transition cursor-pointer"
+                aria-label="Verification Rules"
               >
-                <BookOpen className="w-3.5 h-3.5 text-sky-400" />
+                <BookOpen className="w-3.5 h-3.5 text-sky-400 shrink-0" aria-hidden="true" />
                 <span>Rules</span>
               </button>
             </div>
@@ -149,11 +155,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setTempUserId(userId);
                 setIsMobileUserModalOpen(true);
               }}
-              className="md:hidden flex items-center justify-center w-11 h-11 rounded-xl bg-white/5 border border-white/10 text-slate-300 active:scale-95 transition"
+              className="md:hidden flex items-center justify-center w-11 h-11 rounded-xl bg-white/5 border border-white/10 text-slate-300 active:scale-95 transition cursor-pointer"
               title="Tenant Profile"
               aria-label="Tenant Profile"
             >
-              <User className="w-4 h-4 text-brand-400" />
+              <User className="w-4 h-4 text-brand-400" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -169,10 +175,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={onTriggerScan}
-            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-brand-400 hover:text-white active:scale-95 transition"
+            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-brand-400 hover:text-white active:scale-95 transition cursor-pointer"
             aria-label="Scan Document"
           >
-            <Scan className="w-5 h-5 mb-0.5 text-brand-400" />
+            <Scan className="w-5 h-5 mb-0.5 text-brand-400" aria-hidden="true" />
             <span className="text-[10px] font-bold tracking-tight">Scan</span>
           </button>
 
@@ -180,11 +186,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={onOpenRag}
-            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition relative"
-            aria-label="Past Document Records"
+            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition relative cursor-pointer"
+            aria-label={`Past Document Records: ${ragCount}`}
           >
             <div className="relative">
-              <Database className="w-5 h-5 mb-0.5" />
+              <Database className="w-5 h-5 mb-0.5" aria-hidden="true" />
               {ragCount > 0 && (
                 <span className="absolute -top-1 -right-2 px-1 py-0.2 rounded-full text-[9px] font-bold bg-brand-500 text-white">
                   {ragCount}
@@ -198,10 +204,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={onOpenOkf}
-            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition"
+            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer"
             aria-label="Verification Rules"
           >
-            <BookOpen className="w-5 h-5 mb-0.5" />
+            <BookOpen className="w-5 h-5 mb-0.5" aria-hidden="true" />
             <span className="text-[10px] font-medium tracking-tight">Rules</span>
           </button>
 
@@ -212,10 +218,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               setTempUserId(userId);
               setIsMobileUserModalOpen(true);
             }}
-            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition"
+            className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer"
             aria-label="Tenant Profile"
           >
-            <User className="w-5 h-5 mb-0.5" />
+            <User className="w-5 h-5 mb-0.5" aria-hidden="true" />
             <span className="text-[10px] font-medium tracking-tight">Profile</span>
           </button>
         </div>

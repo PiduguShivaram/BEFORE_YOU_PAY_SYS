@@ -50,11 +50,6 @@ from before_you_pay.models.document import (
     OptionalityStatus,
 )
 from before_you_pay.services.cost_review_questions import CostReviewQuestionsService
-from before_you_pay.services.extra_cost_analysis import (
-    ExtraCostAnalysisService,
-    ExtraCostFlag,
-    ExtraCostFlagType,
-)
 
 
 def _make_component(
@@ -214,7 +209,9 @@ class TestDealerChargeCostReviewQuestions:
         primary = dealer_questions[0]
         assert primary.classification == CostReviewClassification.POTENTIALLY_NEGOTIABLE
         # Exact prompt example referencing actual extracted value
-        assert primary.question == "What service does this ₹15,000 charge cover, and is it mandatory?"
+        assert (
+            primary.question == "What service does this ₹15,000 charge cover, and is it mandatory?"
+        )
         assert primary.amount_involved == 15000.0
         assert primary.potential_amount_to_review == 15000.0
         assert "Potential amount to review" in primary.potential_impact
@@ -223,14 +220,18 @@ class TestDealerChargeCostReviewQuestions:
         # Secondary question checks negotiability under transport guidelines
         secondary = dealer_questions[1]
         assert "₹15,000" in secondary.question
-        assert "negotiable" in secondary.question.lower() or "waivable" in secondary.question.lower()
+        assert (
+            "negotiable" in secondary.question.lower() or "waivable" in secondary.question.lower()
+        )
 
 
 class TestDiscrepancyCostReviewQuestions:
     """Discrepancy review questions: inconsistent, actual extracted values."""
 
     def test_discrepancy_classification_and_questions(self) -> None:
-        c_base = _make_component("Ex-Showroom Price", 1149900.0, ComponentCategory.EX_SHOWROOM_PRICE)
+        c_base = _make_component(
+            "Ex-Showroom Price", 1149900.0, ComponentCategory.EX_SHOWROOM_PRICE
+        )
         c_tcs = _make_component("TCS", 11499.0, ComponentCategory.TCS)
         c_subtotal = _make_component("Stated Subtotal", 1158399.0, ComponentCategory.SUBTOTAL)
 
@@ -250,7 +251,9 @@ class TestDiscrepancyCostReviewQuestions:
             validation_checks=[check],
         )
 
-        disc_questions = [q for q in questions if q.classification == CostReviewClassification.INCONSISTENT]
+        disc_questions = [
+            q for q in questions if q.classification == CostReviewClassification.INCONSISTENT
+        ]
         assert 1 <= len(disc_questions) <= 3
 
         primary = disc_questions[0]
@@ -273,7 +276,11 @@ class TestDuplicatedOverlappingQuestions:
 
         questions = CostReviewQuestionsService.generate_questions(cost_breakdown=[c1, c2])
 
-        dup_questions = [q for q in questions if q.classification == CostReviewClassification.DUPLICATED_OVERLAPPING]
+        dup_questions = [
+            q
+            for q in questions
+            if q.classification == CostReviewClassification.DUPLICATED_OVERLAPPING
+        ]
         assert len(dup_questions) >= 1
         q = dup_questions[0]
         assert "Essential Accessories" in q.question
@@ -295,7 +302,9 @@ class TestUnexplainedChargeQuestions:
         )
         questions = CostReviewQuestionsService.generate_questions(cost_breakdown=[comp])
 
-        unexplained_questions = [q for q in questions if q.classification == CostReviewClassification.UNEXPLAINED]
+        unexplained_questions = [
+            q for q in questions if q.classification == CostReviewClassification.UNEXPLAINED
+        ]
         assert len(unexplained_questions) >= 1
         q = unexplained_questions[0]
         assert "₹5,000" in q.question
@@ -366,7 +375,9 @@ class TestFullRealisticQuotationReviewQuestions:
         c_ins = _make_component("Insurance", 34500.0, ComponentCategory.INSURANCE)
         c_ew = _make_component("Extended Warranty", 24000.0, ComponentCategory.EXTENDED_WARRANTY)
         c_acc = _make_component("Accessories", 35000.0, ComponentCategory.ACCESSORY_PACKAGE)
-        c_handling = _make_component("Dealer Handling Charge", 8000.0, ComponentCategory.HANDLING_FEE)
+        c_handling = _make_component(
+            "Dealer Handling Charge", 8000.0, ComponentCategory.HANDLING_FEE
+        )
         c_offer = _make_component("Offer", 20000.0, ComponentCategory.OFFER)
 
         questions = CostReviewQuestionsService.generate_questions(
@@ -385,7 +396,7 @@ class TestFullRealisticQuotationReviewQuestions:
         # Questions reference actual extracted values
         all_questions_text = " ".join(q.question for q in questions)
         assert "24,000" in all_questions_text  # Warranty
-        assert "8,000" in all_questions_text   # Handling
+        assert "8,000" in all_questions_text  # Handling
         assert "Can I choose my own insurer or insurance policy?" in all_questions_text
         assert "Are these accessories required for delivery?" in all_questions_text
 
@@ -443,4 +454,3 @@ class TestAllSevenClassificationsCovered:
                 assert "Potential amount to review" in q.potential_impact
                 assert "you can save" not in q.potential_impact.lower()
                 assert "you will save" not in q.potential_impact.lower()
-

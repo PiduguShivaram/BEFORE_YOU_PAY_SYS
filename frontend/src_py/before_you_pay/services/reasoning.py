@@ -6,6 +6,7 @@ from uuid import uuid4
 from before_you_pay.models import (
     ChargeNature,
     ClaimType,
+    ComponentCategory,
     DocumentClassification,
     OkfRuleEvidence,
     RagEvidenceChunk,
@@ -58,27 +59,41 @@ class SemanticReasoningEngine:
                 )
             )
 
-        # 1. Cross-reference with User Historical Documents (RAG)
+        # 1. Cross-reference with User Historical / Supporting Documents (RAG)
+        warranty_comps = [
+            c
+            for c in document.cost_breakdown
+            if c.category in (ComponentCategory.WARRANTY, ComponentCategory.EXTENDED_WARRANTY)
+            or "warranty" in (c.name or "").lower()
+        ]
+        insurance_comps = [
+            c
+            for c in document.cost_breakdown
+            if c.category == ComponentCategory.INSURANCE or "insurance" in (c.name or "").lower()
+        ]
+
         for chunk in rag_evidence:
             chunk_lower = chunk.source_text.lower()
             price_matches = re.findall(
-                r"(?:[₹$€£¥]|Rs\.?|INR|USD)?\s*([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)",
+                r"(?:[₹$€£¥]|Rs\.?|INR|USD)\s*([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)",
                 chunk.source_text,
+                re.IGNORECASE,
             )
 
             # Check pricing against overall document total
             if price_matches:
                 prior_price = float(price_matches[-1].replace(",", ""))
                 current_total = float(document.total_amount.normalized_value)
-                if abs(prior_price - current_total) > 0.05:
+                if abs(prior_price - current_total) > 0.05 and current_total > 0:
                     claims.append(
                         ReasoningClaim(
                             claim_id=uuid4(),
                             type=ClaimType.POTENTIAL_OVERLAP,
-                            title="Potential price variation with prior records",
+                            title="Potential price variation with supporting records",
                             description=(
-                                f"Current total is {curr_sym}{current_total:,.2f}, while prior "
-                                f"{chunk.source_document_type.value} specified {curr_sym}{prior_price:,.2f}."
+                                f"Current total is {curr_sym}{current_total:,.2f}, while supporting "
+                                f"{chunk.source_document_type.value} specified {curr_sym}{prior_price:,.2f}. "
+                                "Verify whether terms, specifications, or applied charges differ."
                             ),
                             field_references=[document.total_amount.field_id],
                             rag_evidence_references=[chunk.evidence_id],
@@ -86,22 +101,65 @@ class SemanticReasoningEngine:
                         )
                     )
 
-            # Check warranty coverage
-            if "warranty" in chunk_lower or "coverage" in chunk_lower:
-                claims.append(
-                    ReasoningClaim(
-                        claim_id=uuid4(),
-                        type=ClaimType.POTENTIAL_OVERLAP,
-                        title="Potential overlap with existing warranty coverage",
-                        description=(
-                            f"Your records contain active coverage: '{chunk.source_text[:120]}'. "
-                            "Requires verification whether these services are covered under existing agreement."
-                        ),
-                        field_references=[document.total_amount.field_id],
-                        rag_evidence_references=[chunk.evidence_id],
-                        confidence=chunk.similarity_score,
+            # Check warranty coverage overlap with specific component linkage
+            if "warranty" in chunk_lower or "coverage" in chunk_lower or "guarantee" in chunk_lower:
+                if warranty_comps:
+                    for w_comp in warranty_comps:
+                        w_amt = float(w_comp.amount.normalized_value)
+                        field_ref = [w_comp.amount.field_id]
+                        claims.append(
+                            ReasoningClaim(
+                                claim_id=uuid4(),
+                                type=ClaimType.POTENTIAL_OVERLAP,
+                                title=f"Potential coverage overlap with existing {w_comp.name}",
+                                description=(
+                                    f"Your existing warranty appears to cover some of the same components or coverage areas. "
+                                    f"Compare duration, covered components, and exclusions before purchasing the additional "
+                                    f"{curr_sym}{w_amt:,.2f} {w_comp.name}."
+                                ),
+                                field_references=field_ref,
+                                rag_evidence_references=[chunk.evidence_id],
+                                confidence=chunk.similarity_score,
+                            )
+                        )
+                else:
+                    claims.append(
+                        ReasoningClaim(
+                            claim_id=uuid4(),
+                            type=ClaimType.POTENTIAL_OVERLAP,
+                            title="Potential overlap with existing warranty coverage",
+                            description=(
+                                f"Your supporting records indicate active coverage: '{chunk.source_text[:120]}'. "
+                                "Requires verification whether these services are covered under existing agreement."
+                            ),
+                            field_references=[document.total_amount.field_id]
+                            if document.total_amount
+                            else [],
+                            rag_evidence_references=[chunk.evidence_id],
+                            confidence=chunk.similarity_score,
+                        )
                     )
-                )
+
+            # Check insurance coverage overlap
+            if "insurance" in chunk_lower or "policy" in chunk_lower or "premium" in chunk_lower:
+                if insurance_comps:
+                    for ins_comp in insurance_comps:
+                        ins_amt = float(ins_comp.amount.normalized_value)
+                        claims.append(
+                            ReasoningClaim(
+                                claim_id=uuid4(),
+                                type=ClaimType.POTENTIAL_OVERLAP,
+                                title="Potential overlap with existing insurance policy",
+                                description=(
+                                    f"Your supporting records reference active insurance coverage. "
+                                    f"Compare policy coverage, add-ons, and exclusions with the quoted "
+                                    f"{curr_sym}{ins_amt:,.2f} {ins_comp.name}."
+                                ),
+                                field_references=[ins_comp.amount.field_id],
+                                rag_evidence_references=[chunk.evidence_id],
+                                confidence=chunk.similarity_score,
+                            )
+                        )
 
         # 2. Shipping charge verification check
         if document.shipping_amount and float(document.shipping_amount.normalized_value) > 0.0:
@@ -188,10 +246,13 @@ class SemanticReasoningEngine:
 
         # 4. Document-specific verification claims
         if (
-            document.document_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
+            document.document_type
+            in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
             or document.cost_breakdown
         ):
-            total_val = float(document.total_amount.normalized_value) if document.total_amount else 0.0
+            total_val = (
+                float(document.total_amount.normalized_value) if document.total_amount else 0.0
+            )
             discount_val = (
                 float(document.discount_amount.normalized_value)
                 if document.discount_amount

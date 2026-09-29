@@ -64,7 +64,7 @@ The product informs the user with strict citations; **the user makes the final d
 * **Invariant:** The LLM is **never** the authority for numerical correctness.
 
 ### B. User RAG vs. Curated OKF
-* **User RAG:** Strictly scoped to user-provided documents (prior quotes, active contracts, past invoices). Implemented via lightweight, zero-dependency SQLite with strict multi-tenant isolation (`WHERE user_id = ?`).
+* **User RAG:** Deterministic SQLite-based token-overlap document retrieval with tenant isolation. The current retrieval system is lexical/token-overlap based and does not use neural semantic/vector embeddings. Strictly scoped to user-provided documents (prior quotes, active contracts, past invoices) with strict multi-tenant isolation (`WHERE user_id = ?`).
 * **OKF (Open Knowledge Format):** A versioned, curated knowledge catalog of non-user domain concepts, definitions, and verification rules stored in structured JSON (`data/okf/rules.json`). User documents **must never** be indexed in OKF.
 
 ### C. Data Provenance Chain

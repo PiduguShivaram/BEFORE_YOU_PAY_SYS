@@ -9,6 +9,7 @@ additional configuration.  The actual application factory lives in
 
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode
 
 # Ensure the 'src' package directory is resolvable before importing the
 # application package.
@@ -18,9 +19,6 @@ if str(_src_dir) not in sys.path:
 
 # Re-export the application instance so external tools find ``app`` here.
 from before_you_pay.main import app as _fastapi_app  # noqa: E402
-
-
-from urllib.parse import parse_qs, urlencode
 
 
 async def app(scope, receive, send):

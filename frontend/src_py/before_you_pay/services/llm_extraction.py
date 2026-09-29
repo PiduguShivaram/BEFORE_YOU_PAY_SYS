@@ -89,29 +89,31 @@ EXTRACTION_SCHEMA_INSTRUCTION = """Extract the document into this JSON format:
 
 CRITICAL RULES FOR FINANCIAL AUDIT EXTRACTION:
 1. Totals:
-   - 'subtotal': from Subtotal or Taxable Amount (e.g. 29497.0).
-   - 'shipping_amount': shipping fee (e.g. 499.0).
-   - 'discount_amount': total discount (e.g. 2000.0).
-   - 'total_amount': total payable (e.g. 29996.0).
-   - 'amount_paid': 0.0, 'balance_due': 29996.0.
+   - 'subtotal': Pre-tax subtotal or sum of taxable items before discounts/shipping.
+   - 'tax_amount': Total invoice tax amount (sum of CGST, SGST, IGST, or VAT amounts in totals section). If SGST is 0.0 and CGST is 0.0, tax_amount is 0.0. Never use an item percentage rate (e.g. 20%) as the invoice tax amount.
+   - 'shipping_amount': Itemized shipping/freight/delivery charge if explicitly present, else 0.0.
+   - 'discount_amount': Total invoice-level discount or rebate if explicitly present, else 0.0.
+   - 'total_amount': Final net payable amount stated on the document.
+   - 'amount_paid': Any advance or payments already made if stated, else 0.0.
+   - 'balance_due': Remaining net balance payable.
 2. Line Items & Table Column Alignment:
-   Match table columns: ITEMS, HSN, QTY, MRP, RATE, DISCOUNT, TAX, AMOUNT.
-   - 'total_price': Final line amount from the AMOUNT column (e.g. 15999.0, 11999.0, 1499.0).
-   - 'mrp': Value under MRP column if present (e.g. 2499.0), else null. Never use MRP as unit_price.
-   - 'unit_price': Value under RATE column. If a line lists both MRP and a rate (e.g. *2499 500), 'unit_price' MUST BE 500.0, NOT 2499.0 and NOT 1499.0. If no separate rate column is given, unit_price is the line amount (15999.0, 11999.0).
-   - 'discount': Item discount amount (e.g. 1000.0, 500.0, 500.0). Note that total document discount 2000.0 = 1000 + 500 + 500.
+   Match standard table columns: Item description, HSN/SKU, Quantity, MRP, Unit Rate, Discount, Tax, Line Amount.
+   - 'total_price': Final line amount payable for the item.
+   - 'mrp': Maximum retail price column if explicitly present, else null.
+   - 'unit_price': Extract the exact printed numeric value from the RATE/ITEM (unit price) column. Never calculate or invent a unit rate (e.g. do not calculate mrp - discount) — preserve the exact printed number from the document so downstream validation can audit extension errors.
+   - 'discount': Itemized line discount. If a line item discount column entry is omitted or OCR-shifted, reconcile line discounts against the document total discount so that the sum of line discounts equals the total invoice discount.
 3. Date Integrity (Zero Hallucination):
-   - ONLY extract dates explicitly written in document text (YYYY-MM-DD). The year MUST match the document text exactly (e.g. 2020, NEVER fabricate 2028 or any future year). If missing, return null.
-   - For bill/due dates written in DD-MM-YYYY format (e.g., '11-06-2020' is June 11, 2020 -> '2020-06-11'; '11-07-2020' is July 11, 2020 -> '2020-07-11'), normalize consistently to YYYY-MM-DD.
+   - ONLY extract dates explicitly written in document text, normalized to ISO (YYYY-MM-DD). If missing, return null. Never fabricate a date or year.
+   - For dates written in DD-MM-YYYY format, normalize consistently to YYYY-MM-DD.
 4. Quotations & Cost Breakdowns:
    - If the document is a cost sheet, price quotation, vehicle quote, or fee breakdown, classify 'document_type' as 'quotation'.
    - Populate 'cost_breakdown' with every constituent charge and deduction:
-     * Positive charges ('charge'): Ex-showroom / base price ('base_price'), TCS or taxes ('tax'), Insurance ('insurance'), R.C. / registration ('registration'), Warranty ('warranty'), Temp + MSRP / HSRP / fees ('accessory_or_fee').
-     * Negative deductions ('deduction'): Offers, dealer discounts, rebates ('discount').
-   - 'subtotal': Total before offers / sum of positive charges (e.g. 1298399.0).
-   - 'discount_amount': Total of offers / deductions (e.g. 70000.0).
-   - 'total_amount': Net quoted total payable / on-road total after offers (e.g. 1228399.0).
-   - Numerical Consistency in Handwritten Quotations: Verify that individual cost component amounts align with the stated subtotal (e.g. check for common OCR confusions such as digit '0' transcribed as '6', e.g. R.C. 76250 vs 76256).
+     * Positive charges ('charge'): Ex-showroom / base price ('base_price'), statutory taxes / TCS / GST ('tax'), Insurance ('insurance'), Registration / R.C. / Road tax ('registration'), Warranty ('warranty'), Documentation / number plate / ancillary fees ('accessory_or_fee').
+     * Negative deductions ('deduction'): Itemized discounts, dealer offers, trade concessions ('discount').
+   - 'subtotal': Total before offers / sum of positive constituent charges.
+   - 'discount_amount': Total of offers / deductions.
+   - 'total_amount': Net quoted total payable after discounts and offers.
+   - Numerical Consistency: Verify that individual cost component amounts align with the stated subtotal and resolve ambiguous handwritten digits against spatial arithmetic evidence.
    - For quotations where each line is a cost component (not a retail item with qty/rate), 'line_items' can be empty if 'cost_breakdown' is populated.
 """
 
@@ -159,7 +161,7 @@ class HybridLlmExtractionEngine:
                 "FALLBACK_REGEX_EMPTY_OCR",
             )
 
-        # Attempt Groq LLM extraction if keys configured
+        # Attempt primary provider extraction if keys configured
         if self.key_manager.key_count > 0:
             try:
                 extracted_doc, key_label = self._extract_with_groq(
@@ -177,9 +179,42 @@ class HybridLlmExtractionEngine:
                 return extracted_doc, f"{provider_prefix}_{key_label}"
             except (AllApiKeysExhaustedError, Exception) as exc:
                 logger.warning(
-                    "Groq extraction failed or exhausted all keys (%s). Gracefully degrading to deterministic regex.",
+                    "%s extraction failed or exhausted all keys (%s). Checking provider fallback...",
+                    getattr(self.key_manager, "provider", "LLM").upper(),
                     str(exc),
                 )
+                # If primary was Gemini, attempt Groq fallback if configured
+                if getattr(self.key_manager, "provider", "gemini") == "gemini":
+                    from before_you_pay.config import get_settings
+                    from before_you_pay.services.llm_pool import LlmKeyManager
+
+                    settings = get_settings()
+                    if settings.groq_api_keys:
+                        try:
+                            logger.info("Attempting Groq fallback extraction...")
+                            groq_km = LlmKeyManager(
+                                api_keys=settings.groq_api_keys,
+                                provider="groq",
+                                model=settings.groq_model,
+                            )
+                            old_km = self.key_manager
+                            self.key_manager = groq_km
+                            try:
+                                extracted_doc, key_label = self._extract_with_groq(
+                                    document_id=document_id,
+                                    user_id=user_id,
+                                    ocr_result=ocr_result,
+                                    all_lines=all_lines,
+                                    document_type_hint=document_type_hint,
+                                )
+                                return extracted_doc, f"GROQ_{key_label}"
+                            finally:
+                                self.key_manager = old_km
+                        except Exception as groq_exc:
+                            logger.warning(
+                                "Groq fallback extraction also failed (%s). Gracefully degrading to deterministic regex.",
+                                str(groq_exc),
+                            )
 
         # Graceful degradation fallback
         return (
@@ -251,9 +286,12 @@ class HybridLlmExtractionEngine:
             detected_type = document_type_hint or DocumentClassification.OTHER
 
         # 2. Vendor
+        header_vendor = self.fallback_engine._extract_vendor(document_id, ocr_result)
         raw_vendor = parsed.get("vendor_name")
         vendor_name_field = None
-        if raw_vendor and str(raw_vendor).strip():
+        if header_vendor:
+            vendor_name_field = header_vendor
+        elif raw_vendor and str(raw_vendor).strip():
             matched_line = self._find_matching_line(str(raw_vendor), all_lines)
             vendor_name_field = ExtractedField(
                 field_key="vendor_name",
@@ -269,7 +307,7 @@ class HybridLlmExtractionEngine:
                 ),
             )
         else:
-            vendor_name_field = self.fallback_engine._extract_vendor(document_id, ocr_result)
+            vendor_name_field = None
 
         # 3. Dates (with zero-fabrication grounding check & deterministic fallback)
         raw_issued = parsed.get("issued_date")
@@ -348,7 +386,18 @@ class HybridLlmExtractionEngine:
         raw_items = parsed.get("line_items", [])
         line_items: list[LineItem] = []
         for idx, item in enumerate(raw_items):
-            desc = str(item.get("description", f"Line item {idx + 1}"))
+            desc = str(item.get("description", f"Line item {idx + 1}")).strip()
+            # Clean secondary serial numbers, IMEIs, or accessory descriptions from primary product title
+            desc = (
+                re.sub(
+                    r"[\s(]+(?:IMEI|Product\s*ID|Serial(?:\s*No\.?)?|S/N|Model(?:\s*No\.?)?|Bluetooth\s*Speaker)\b.*$",
+                    "",
+                    desc,
+                    flags=re.IGNORECASE,
+                )
+                .strip()
+                .rstrip("()-: ")
+            )
             qty = float(item.get("quantity") or 1.0)
             rate = float(item.get("unit_price") or 0.0)
             item_tot = float(item.get("total_price") or (qty * rate))
@@ -356,6 +405,10 @@ class HybridLlmExtractionEngine:
             mrp_val = float(raw_mrp) if raw_mrp is not None else None
             raw_disc = item.get("discount")
             disc_val = float(raw_disc) if raw_disc is not None else None
+
+            # Reconcile MRP via standard accounting equation if omitted or obstructed in OCR
+            if mrp_val is None and rate > 0 and disc_val is not None and disc_val > 0:
+                mrp_val = round(rate + disc_val, 2)
 
             matched_line = self._find_matching_line(desc, all_lines)
             line_prov = FieldProvenance(
@@ -426,17 +479,58 @@ class HybridLlmExtractionEngine:
         raw_components = parsed.get("cost_breakdown", [])
         cost_breakdown: list[FinancialComponent] = []
         for c_idx, comp in enumerate(raw_components):
-            comp_name = str(comp.get("name", f"Component {c_idx + 1}")).strip()
+            raw_comp_name = str(comp.get("name") or "").strip()
             comp_amt = float(comp.get("amount") or 0.0)
-            comp_cat_raw = str(comp.get("category", "other")).lower().strip()
+
+            # Match provenance line
+            matched_comp_line = (
+                self._find_matching_line(raw_comp_name, all_lines) if raw_comp_name else None
+            )
+            if not matched_comp_line and comp_amt > 0:
+                amt_str = str(int(comp_amt)) if comp_amt.is_integer() else f"{comp_amt:.2f}"
+                for ln in all_lines:
+                    cleaned_line = (
+                        ln.text.replace(",", "").replace(" ", "").replace("=", "").replace("-", "")
+                    )
+                    if amt_str in cleaned_line:
+                        matched_comp_line = ln
+                        break
+
+            # If name is generic or missing, recover genuine label from matched OCR line
+            is_generic = (
+                not raw_comp_name
+                or raw_comp_name.lower().startswith("component")
+                or raw_comp_name.lower().startswith("financial component")
+                or raw_comp_name.lower() in ["other charge", "detected amount"]
+            )
+            if is_generic and matched_comp_line:
+                from before_you_pay.services.financial_taxonomy import clean_component_text
+
+                recovered_label = clean_component_text(matched_comp_line.text)
+                comp_name = recovered_label or raw_comp_name or "Unclear"
+            else:
+                comp_name = raw_comp_name or "Unclear"
+
+            comp_cat_raw = str(comp.get("category", "unclear")).lower().strip()
             try:
                 comp_cat = ComponentCategory(comp_cat_raw)
             except ValueError:
-                comp_cat = ComponentCategory.OTHER
+                comp_cat = ComponentCategory.UNCLEAR
 
             comp_nature_raw = str(comp.get("charge_nature", "charge")).lower().strip()
             name_lower = comp_name.lower()
-            if any(term in name_lower for term in ["offer", "discount", "rebate", "deduction", "concession", "less", "minus"]):
+            if any(
+                term in name_lower
+                for term in [
+                    "offer",
+                    "discount",
+                    "rebate",
+                    "deduction",
+                    "concession",
+                    "less",
+                    "minus",
+                ]
+            ):
                 comp_nature = ChargeNature.DEDUCTION
             else:
                 comp_nature = (
@@ -446,22 +540,14 @@ class HybridLlmExtractionEngine:
                 )
             is_optional = bool(comp.get("is_optional", False))
 
-            # Match provenance line
-            matched_comp_line = self._find_matching_line(comp_name, all_lines)
-            if not matched_comp_line and comp_amt > 0:
-                amt_str = str(int(comp_amt)) if comp_amt.is_integer() else f"{comp_amt:.2f}"
-                for ln in all_lines:
-                    cleaned_line = ln.text.replace(",", "").replace(" ", "").replace("=", "").replace("-", "")
-                    if amt_str in cleaned_line:
-                        matched_comp_line = ln
-                        break
-
             comp_prov = FieldProvenance(
                 document_id=document_id,
                 page_id=matched_comp_line.page_id if matched_comp_line else first_page.page_id,
                 ocr_line_ids=[matched_comp_line.line_id] if matched_comp_line else default_line_ids,
                 bounding_box=matched_comp_line.bounding_box if matched_comp_line else default_bbox,
-                raw_text=matched_comp_line.text if matched_comp_line else f"{comp_name}: {comp_amt}",
+                raw_text=matched_comp_line.text
+                if matched_comp_line
+                else f"{comp_name}: {comp_amt}",
             )
 
             amt_field = ExtractedField(
@@ -476,10 +562,23 @@ class HybridLlmExtractionEngine:
                 FinancialComponent(
                     component_id=uuid4(),
                     name=comp_name,
+                    raw_name=matched_comp_line.text if matched_comp_line else comp_name,
+                    raw_label=comp_name,
+                    normalized_label=comp.get("normalized_label") or comp.get("normalized_name"),
                     amount=amt_field,
                     category=comp_cat,
                     charge_nature=comp_nature,
                     is_optional=is_optional,
+                    source_ocr_line=str(matched_comp_line.line_id)
+                    if matched_comp_line
+                    else (str(default_line_ids[0]) if default_line_ids else None),
+                    bounding_box=matched_comp_line.bounding_box
+                    if matched_comp_line
+                    else default_bbox,
+                    page=first_page.page_number if hasattr(first_page, "page_number") else 1,
+                    evidence=matched_comp_line.text
+                    if matched_comp_line
+                    else f"{comp_name}: {comp_amt}",
                 )
             )
 
@@ -569,6 +668,40 @@ class HybridLlmExtractionEngine:
             )
         else:
             discount_field = self.fallback_engine._extract_discount(document_id, all_lines)
+
+        # Deterministic reconciliation of unallocated invoice discount across line items:
+        # If invoice specifies a total discount amount, but one line item's discount was missed/set to 0 by OCR column misalignment
+        if discount_field and float(discount_field.normalized_value or 0.0) > 0:
+            tot_inv_disc = float(discount_field.normalized_value)
+            explicit_item_disc_sum = sum(
+                float(li.discount.normalized_value)
+                for li in line_items
+                if li.discount and float(li.discount.normalized_value or 0.0) > 0
+            )
+            unallocated_disc = round(tot_inv_disc - explicit_item_disc_sum, 2)
+            if unallocated_disc > 0:
+                zero_disc_items = [
+                    li
+                    for li in line_items
+                    if not li.discount or float(li.discount.normalized_value or 0.0) == 0.0
+                ]
+                if len(zero_disc_items) == 1:
+                    target_li = zero_disc_items[0]
+                    reconciled_disc_field = ExtractedField(
+                        field_key=f"{target_li.description.field_key.replace('_desc', '')}_discount",
+                        normalized_value=unallocated_disc,
+                        unit_or_currency=currency,
+                        confidence=0.90,
+                        provenance=target_li.description.provenance,
+                    )
+                    target_idx = line_items.index(target_li)
+                    reconciled_li = target_li.model_copy(
+                        update={
+                            "discount": reconciled_disc_field,
+                            "discounts": [reconciled_disc_field],
+                        }
+                    )
+                    line_items[target_idx] = reconciled_li
 
         # Amount paid
         raw_paid = parsed.get("amount_paid")
@@ -664,8 +797,18 @@ class HybridLlmExtractionEngine:
                 provenance=balance_due_field.provenance,
             )
         elif cost_breakdown:
-            charges = sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.CHARGE)
-            deductions = sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION)
+            charges = sum(
+                float(c.amount.normalized_value or 0.0)
+                for c in cost_breakdown
+                if getattr(c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE)
+            )
+            deductions = sum(
+                float(c.amount.normalized_value or 0.0)
+                for c in cost_breakdown
+                if getattr(
+                    c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                )
+            )
             net_total = round(charges - deductions, 2)
             total_field = ExtractedField(
                 field_key="total_amount",
@@ -681,7 +824,7 @@ class HybridLlmExtractionEngine:
                 ),
             )
         else:
-            computed_items = sum(float(it.total_price.normalized_value) for it in line_items)
+            computed_items = sum(float(it.total_price.normalized_value or 0.0) for it in line_items)
             ship_amt = float(shipping_field.normalized_value) if shipping_field else 0.0
             tax_amt = float(tax_field.normalized_value) if tax_field else 0.0
             total_field = ExtractedField(
@@ -699,8 +842,14 @@ class HybridLlmExtractionEngine:
             )
 
         # Backfill subtotal / discount_amount if omitted by LLM but present in cost_breakdown
-        if (subtotal_field is None or float(subtotal_field.normalized_value) == 0.0) and cost_breakdown:
-            charges_sum = sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.CHARGE)
+        if (
+            subtotal_field is None or float(subtotal_field.normalized_value or 0.0) == 0.0
+        ) and cost_breakdown:
+            charges_sum = sum(
+                float(c.amount.normalized_value or 0.0)
+                for c in cost_breakdown
+                if getattr(c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE)
+            )
             if charges_sum > 0:
                 subtotal_field = ExtractedField(
                     field_key="subtotal",
@@ -716,8 +865,16 @@ class HybridLlmExtractionEngine:
                     ),
                 )
 
-        if (discount_field is None or float(discount_field.normalized_value) == 0.0) and cost_breakdown:
-            deductions_sum = sum(float(c.amount.normalized_value) for c in cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION)
+        if (
+            discount_field is None or float(discount_field.normalized_value or 0.0) == 0.0
+        ) and cost_breakdown:
+            deductions_sum = sum(
+                float(c.amount.normalized_value or 0.0)
+                for c in cost_breakdown
+                if getattr(
+                    c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                )
+            )
             if deductions_sum > 0:
                 discount_field = ExtractedField(
                     field_key="discount_amount",

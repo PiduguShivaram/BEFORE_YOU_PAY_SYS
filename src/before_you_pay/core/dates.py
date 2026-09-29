@@ -174,7 +174,9 @@ def verify_date_grounding(
         txt = line.text.lower()
         if field_type == "issued_date" and "due" in txt:
             continue
-        if field_type == "due_date" and any(k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]):
+        if field_type == "due_date" and any(
+            k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]
+        ):
             continue
 
         score = 0
@@ -209,7 +211,9 @@ def verify_date_grounding(
         txt = line.text.lower()
         if field_type == "issued_date" and "due" in txt:
             continue
-        if field_type == "due_date" and any(k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]):
+        if field_type == "due_date" and any(
+            k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]
+        ):
             continue
 
         if y in line.text and (
@@ -234,17 +238,36 @@ def fallback_extract_date(
     kw_issued = ["bill date", "invoice date", "issue date", "inv date", "date :"]
     kws = kw_due if field_type == "due_date" else kw_issued
 
-    for line in all_lines:
+    for idx, line in enumerate(all_lines):
         txt = line.text.lower()
         if field_type == "issued_date" and "due" in txt:
             continue
-        if field_type == "due_date" and any(k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]):
+        if field_type == "due_date" and any(
+            k in txt for k in ["bill date", "invoice date", "issue date", "inv date"]
+        ):
             continue
 
         if any(k in txt for k in kws):
             norm = extract_date_from_text(line.text, default_dmy=default_dmy)
             if norm:
                 return norm, line
+            # Check subsequent lines (e.g. 2-line layout: "Due Date :" followed by "11-07-2020")
+            for next_line in all_lines[idx + 1 : idx + 3]:
+                if any(
+                    k in next_line.text.lower()
+                    for k in [
+                        "bill date",
+                        "invoice date",
+                        "issue date",
+                        "po no",
+                        "total",
+                        "subtotal",
+                    ]
+                ):
+                    break
+                next_norm = extract_date_from_text(next_line.text, default_dmy=default_dmy)
+                if next_norm:
+                    return next_norm, next_line
 
     # If issued_date and no explicit label found, check top lines for a standalone date
     if field_type == "issued_date":

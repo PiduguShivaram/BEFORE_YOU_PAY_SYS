@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from before_you_pay.core.dates import normalize_date_to_iso
 from before_you_pay.models import (
+    AmountState,
     ChargeNature,
     DocumentClassification,
     StructuredFinancialDocument,
@@ -207,99 +208,277 @@ class DeterministicValidationEngine:
         if not document.cost_breakdown:
             return results
 
-        charges = [c for c in document.cost_breakdown if c.charge_nature == ChargeNature.CHARGE]
-        deductions = [c for c in document.cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION]
+        charges = [
+            c
+            for c in document.cost_breakdown
+            if getattr(c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE)
+        ]
+        deductions = [
+            c
+            for c in document.cost_breakdown
+            if getattr(c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION)
+        ]
 
         if not charges:
             return results
 
-        sum_charges = round(sum(float(c.amount.normalized_value) for c in charges), 2)
-        sum_deductions = round(sum(float(c.amount.normalized_value) for c in deductions), 2)
+        unreadable_charges = [
+            c
+            for c in charges
+            if getattr(c, "amount_state", None)
+            in (AmountState.MISSING, AmountState.UNKNOWN, AmountState.UNREADABLE)
+            or not isinstance(getattr(c.amount, "normalized_value", None), (int, float))
+        ]
 
-        # Check 1: Charges Sum == Stated Subtotal (or Total Before Offers)
+        unreadable_deductions = [
+            c
+            for c in deductions
+            if getattr(c, "amount_state", None)
+            in (AmountState.MISSING, AmountState.UNKNOWN, AmountState.UNREADABLE)
+            or not isinstance(getattr(c.amount, "normalized_value", None), (int, float))
+        ]
+
+        # Check 1: Component Reconciliation (Charges Sum == Stated Subtotal)
         if document.subtotal:
             stated_sub = round(float(document.subtotal.normalized_value), 2)
-            input_ids = [c.amount.field_id for c in charges] + [document.subtotal.field_id]
-            delta_sub = round(abs(sum_charges - stated_sub), 2)
+            input_ids = [c.amount.field_id for c in charges if hasattr(c.amount, "field_id")] + [
+                document.subtotal.field_id
+            ]
 
-            if delta_sub <= 0.02:
+            if unreadable_charges:
+                bad_c = unreadable_charges[0]
                 results.append(
                     ValidationCheck(
                         validation_id=uuid4(),
                         check_code="QUOTATION_SUBTOTAL_CONSISTENCY",
-                        status=ValidationStatus.PASS,
+                        status=ValidationStatus.INCONCLUSIVE,
                         input_field_ids=input_ids,
                         expected_value=stated_sub,
-                        calculated_value=sum_charges,
-                        absolute_delta=delta_sub,
-                        severity=ValidationSeverity.INFO,
+                        calculated_value=None,
+                        severity=ValidationSeverity.WARNING,
                         message=(
-                            f"Sum of quotation cost components ({curr_sym}{sum_charges:,.2f}) matches stated "
-                            f"subtotal / total before offers ({curr_sym}{stated_sub:,.2f})."
+                            f"Component reconciliation inconclusive: Charge '{bad_c.name}' has an unreadable or unverified amount ({bad_c.amount_state.value}). "
+                            "Cannot confirm mathematical reconciliation against stated subtotal."
                         ),
                     )
                 )
             else:
+                sum_charges = round(
+                    sum(
+                        float(c.amount.normalized_value)
+                        for c in charges
+                        if c.amount_state != AmountState.NOT_APPLICABLE
+                    ),
+                    2,
+                )
+                delta_sub = round(abs(sum_charges - stated_sub), 2)
+
+                if delta_sub <= 0.02:
+                    results.append(
+                        ValidationCheck(
+                            validation_id=uuid4(),
+                            check_code="QUOTATION_SUBTOTAL_CONSISTENCY",
+                            status=ValidationStatus.PASS,
+                            input_field_ids=input_ids,
+                            expected_value=stated_sub,
+                            calculated_value=sum_charges,
+                            absolute_delta=delta_sub,
+                            severity=ValidationSeverity.INFO,
+                            message=(
+                                f"Component reconciliation: Sum of quotation cost components ({curr_sym}{sum_charges:,.2f}) matches stated "
+                                f"subtotal / total before offers ({curr_sym}{stated_sub:,.2f})."
+                            ),
+                        )
+                    )
+                else:
+                    results.append(
+                        ValidationCheck(
+                            validation_id=uuid4(),
+                            check_code="QUOTATION_SUBTOTAL_CONSISTENCY",
+                            status=ValidationStatus.FAIL,
+                            input_field_ids=input_ids,
+                            expected_value=stated_sub,
+                            calculated_value=sum_charges,
+                            absolute_delta=delta_sub,
+                            severity=ValidationSeverity.WARNING,
+                            message=(
+                                f"Component reconciliation discrepancy: Stated subtotal is {curr_sym}{stated_sub:,.2f}, "
+                                f"but listed components sum to {curr_sym}{sum_charges:,.2f} "
+                                f"(difference: {curr_sym}{delta_sub:,.2f}). Ask the dealer to clarify."
+                            ),
+                        )
+                    )
+        elif not unreadable_charges:
+            sum_charges = round(
+                sum(
+                    float(c.amount.normalized_value)
+                    for c in charges
+                    if c.amount_state != AmountState.NOT_APPLICABLE
+                ),
+                2,
+            )
+        else:
+            sum_charges = None
+
+        # Check 2: Offers Reconciliation (Sum of Deductions == Stated Discount/Offers)
+        if deductions or (
+            document.discount_amount and float(document.discount_amount.normalized_value) > 0
+        ):
+            disc_input_ids = [
+                c.amount.field_id for c in deductions if hasattr(c.amount, "field_id")
+            ]
+            if unreadable_deductions:
+                bad_d = unreadable_deductions[0]
                 results.append(
                     ValidationCheck(
                         validation_id=uuid4(),
-                        check_code="QUOTATION_SUBTOTAL_CONSISTENCY",
-                        status=ValidationStatus.FAIL,
-                        input_field_ids=input_ids,
-                        expected_value=stated_sub,
-                        calculated_value=sum_charges,
-                        absolute_delta=delta_sub,
+                        check_code="OFFERS_RECONCILIATION",
+                        status=ValidationStatus.INCONCLUSIVE,
+                        input_field_ids=disc_input_ids,
+                        expected_value=float(document.discount_amount.normalized_value)
+                        if document.discount_amount
+                        else None,
+                        calculated_value=None,
                         severity=ValidationSeverity.WARNING,
                         message=(
-                            f"Component reconciliation discrepancy: Stated subtotal is {curr_sym}{stated_sub:,.2f}, "
-                            f"but listed components sum to {curr_sym}{sum_charges:,.2f} "
-                            f"(difference: {curr_sym}{delta_sub:,.2f}). Ask the dealer to clarify."
+                            f"Offers reconciliation inconclusive: Deduction '{bad_d.name}' has an unreadable or unverified amount ({bad_d.amount_state.value})."
                         ),
                     )
                 )
-
-        # Check 2: Net Quoted Total == Subtotal - Deductions
-        base_for_total = float(document.subtotal.normalized_value) if document.subtotal else sum_charges
-        expected_net = round(base_for_total - sum_deductions, 2)
-        stated_net = round(float(document.total_amount.normalized_value), 2)
-        delta_net = round(abs(expected_net - stated_net), 2)
-        net_input_ids = [c.amount.field_id for c in document.cost_breakdown] + [document.total_amount.field_id]
-
-        if delta_net <= 0.02:
-            results.append(
-                ValidationCheck(
-                    validation_id=uuid4(),
-                    check_code="QUOTATION_NET_TOTAL_CONSISTENCY",
-                    status=ValidationStatus.PASS,
-                    input_field_ids=net_input_ids,
-                    expected_value=stated_net,
-                    calculated_value=expected_net,
-                    absolute_delta=delta_net,
-                    severity=ValidationSeverity.INFO,
-                    message=(
-                        f"Quoted total ({curr_sym}{stated_net:,.2f}) reconciles mathematically: "
-                        f"subtotal ({curr_sym}{base_for_total:,.2f}) minus offers/deductions ({curr_sym}{sum_deductions:,.2f})."
+            else:
+                sum_deductions = round(
+                    sum(
+                        float(c.amount.normalized_value)
+                        for c in deductions
+                        if c.amount_state != AmountState.NOT_APPLICABLE
                     ),
+                    2,
                 )
-            )
+                if document.discount_amount:
+                    disc_input_ids.append(document.discount_amount.field_id)
+                    stated_disc = round(float(document.discount_amount.normalized_value), 2)
+                    delta_disc = round(abs(sum_deductions - stated_disc), 2)
+                    if delta_disc <= 0.02:
+                        results.append(
+                            ValidationCheck(
+                                validation_id=uuid4(),
+                                check_code="OFFERS_RECONCILIATION",
+                                status=ValidationStatus.PASS,
+                                input_field_ids=disc_input_ids,
+                                expected_value=stated_disc,
+                                calculated_value=sum_deductions,
+                                absolute_delta=delta_disc,
+                                severity=ValidationSeverity.INFO,
+                                message=(
+                                    f"Offers reconciliation: Sum of itemized offers/discounts (-{curr_sym}{sum_deductions:,.2f}) "
+                                    f"matches stated discount ({curr_sym}{stated_disc:,.2f})."
+                                ),
+                            )
+                        )
+                    else:
+                        results.append(
+                            ValidationCheck(
+                                validation_id=uuid4(),
+                                check_code="OFFERS_RECONCILIATION",
+                                status=ValidationStatus.FAIL,
+                                input_field_ids=disc_input_ids,
+                                expected_value=stated_disc,
+                                calculated_value=sum_deductions,
+                                absolute_delta=delta_disc,
+                                severity=ValidationSeverity.WARNING,
+                                message=(
+                                    f"Offers reconciliation discrepancy: Stated discount is {curr_sym}{stated_disc:,.2f}, "
+                                    f"but itemized offers sum to {curr_sym}{sum_deductions:,.2f} "
+                                    f"(difference: {curr_sym}{delta_disc:,.2f})."
+                                ),
+                            )
+                        )
+                elif sum_deductions > 0:
+                    results.append(
+                        ValidationCheck(
+                            validation_id=uuid4(),
+                            check_code="OFFERS_RECONCILIATION",
+                            status=ValidationStatus.PASS,
+                            input_field_ids=disc_input_ids,
+                            expected_value=sum_deductions,
+                            calculated_value=sum_deductions,
+                            absolute_delta=0.0,
+                            severity=ValidationSeverity.INFO,
+                            message=(
+                                f"Offers reconciliation: {len(deductions)} itemized offer(s) totaling "
+                                f"-{curr_sym}{sum_deductions:,.2f} verified."
+                            ),
+                        )
+                    )
+        elif not unreadable_deductions:
+            sum_deductions = 0.0
         else:
-            results.append(
-                ValidationCheck(
-                    validation_id=uuid4(),
-                    check_code="QUOTATION_NET_TOTAL_CONSISTENCY",
-                    status=ValidationStatus.FAIL,
-                    input_field_ids=net_input_ids,
-                    expected_value=stated_net,
-                    calculated_value=expected_net,
-                    absolute_delta=delta_net,
-                    severity=ValidationSeverity.CRITICAL,
-                    message=(
-                        f"Quoted total arithmetic discrepancy: Stated total is {curr_sym}{stated_net:,.2f}, "
-                        f"but calculated net total (subtotal {curr_sym}{base_for_total:,.2f} - offers {curr_sym}{sum_deductions:,.2f}) "
-                        f"is {curr_sym}{expected_net:,.2f} (difference: {curr_sym}{delta_net:,.2f}). Requires verification."
-                    ),
+            sum_deductions = None
+
+        # Check 3: Quoted Total Reconciliation (Net Quoted Total == Subtotal - Deductions)
+        if document.total_amount:
+            net_input_ids = [
+                c.amount.field_id for c in document.cost_breakdown if hasattr(c.amount, "field_id")
+            ] + [document.total_amount.field_id]
+            stated_net = round(float(document.total_amount.normalized_value), 2)
+
+            if unreadable_charges or unreadable_deductions:
+                results.append(
+                    ValidationCheck(
+                        validation_id=uuid4(),
+                        check_code="QUOTATION_NET_TOTAL_CONSISTENCY",
+                        status=ValidationStatus.INCONCLUSIVE,
+                        input_field_ids=net_input_ids,
+                        expected_value=stated_net,
+                        calculated_value=None,
+                        severity=ValidationSeverity.WARNING,
+                        message="Quoted total reconciliation inconclusive: Breakdown contains unreadable, unknown, or missing charge amounts.",
+                    )
                 )
-            )
+            else:
+                base_for_total = (
+                    float(document.subtotal.normalized_value)
+                    if document.subtotal
+                    else (sum_charges or 0.0)
+                )
+                expected_net = round(base_for_total - (sum_deductions or 0.0), 2)
+                delta_net = round(abs(expected_net - stated_net), 2)
+
+                if delta_net <= 0.02:
+                    results.append(
+                        ValidationCheck(
+                            validation_id=uuid4(),
+                            check_code="QUOTATION_NET_TOTAL_CONSISTENCY",
+                            status=ValidationStatus.PASS,
+                            input_field_ids=net_input_ids,
+                            expected_value=stated_net,
+                            calculated_value=expected_net,
+                            absolute_delta=delta_net,
+                            severity=ValidationSeverity.INFO,
+                            message=(
+                                f"Quoted total reconciliation: Quoted total ({curr_sym}{stated_net:,.2f}) reconciles mathematically: "
+                                f"subtotal ({curr_sym}{base_for_total:,.2f}) minus offers/deductions ({curr_sym}{(sum_deductions or 0.0):,.2f})."
+                            ),
+                        )
+                    )
+                else:
+                    results.append(
+                        ValidationCheck(
+                            validation_id=uuid4(),
+                            check_code="QUOTATION_NET_TOTAL_CONSISTENCY",
+                            status=ValidationStatus.FAIL,
+                            input_field_ids=net_input_ids,
+                            expected_value=stated_net,
+                            calculated_value=expected_net,
+                            absolute_delta=delta_net,
+                            severity=ValidationSeverity.CRITICAL,
+                            message=(
+                                f"Quoted total arithmetic discrepancy: Stated total is {curr_sym}{stated_net:,.2f}, "
+                                f"but calculated net total (subtotal {curr_sym}{base_for_total:,.2f} - offers {curr_sym}{(sum_deductions or 0.0):,.2f}) "
+                                f"is {curr_sym}{expected_net:,.2f} (difference: {curr_sym}{delta_net:,.2f}). Requires verification."
+                            ),
+                        )
+                    )
 
         return results
 
@@ -313,7 +492,13 @@ class DeterministicValidationEngine:
 
         if not document.line_items:
             if document.cost_breakdown:
-                charges = [c for c in document.cost_breakdown if c.charge_nature == ChargeNature.CHARGE]
+                charges = [
+                    c
+                    for c in document.cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
+                    )
+                ]
                 sum_charges = round(sum(float(c.amount.normalized_value) for c in charges), 2)
                 stated_sub = (
                     round(float(document.subtotal.normalized_value), 2)
@@ -414,7 +599,16 @@ class DeterministicValidationEngine:
             else None
         )
         charges_sum = (
-            round(sum(float(c.amount.normalized_value) for c in document.cost_breakdown if c.charge_nature == ChargeNature.CHARGE), 2)
+            round(
+                sum(
+                    float(c.amount.normalized_value)
+                    for c in document.cost_breakdown
+                    if getattr(
+                        c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
+                    )
+                ),
+                2,
+            )
             if document.cost_breakdown
             else None
         )
@@ -427,7 +621,13 @@ class DeterministicValidationEngine:
             float(document.discount_amount.normalized_value) if document.discount_amount else 0.0
         )
         if discount_val == 0.0 and document.cost_breakdown:
-            ded_sum = sum(float(c.amount.normalized_value) for c in document.cost_breakdown if c.charge_nature == ChargeNature.DEDUCTION)
+            ded_sum = sum(
+                float(c.amount.normalized_value)
+                for c in document.cost_breakdown
+                if getattr(
+                    c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
+                )
+            )
             if ded_sum > 0:
                 discount_val = ded_sum
         total_val = round(float(document.total_amount.normalized_value), 2)
@@ -443,7 +643,11 @@ class DeterministicValidationEngine:
         for f in document.fees:
             input_ids.append(f.field_id)
 
-        base = subtotal_val if subtotal_val is not None else (charges_sum if charges_sum is not None else items_sum)
+        base = (
+            subtotal_val
+            if subtotal_val is not None
+            else (charges_sum if charges_sum is not None else items_sum)
+        )
 
         if base is None:
             return ValidationCheck(
@@ -460,7 +664,11 @@ class DeterministicValidationEngine:
             cand_breakdown = round(base - discount_val, 2)
             if abs(cand_breakdown - total_val) <= 0.02:
                 expected_calc = cand_breakdown
-                discount_note = f" (deducting offers/deductions of {curr_sym}{discount_val:,.2f} from pre-offer subtotal)" if discount_val > 0 else ""
+                discount_note = (
+                    f" (deducting offers/deductions of {curr_sym}{discount_val:,.2f} from pre-offer subtotal)"
+                    if discount_val > 0
+                    else ""
+                )
                 return ValidationCheck(
                     validation_id=uuid4(),
                     check_code="ARITHMETIC_TOTAL_CONSISTENCY",
@@ -551,7 +759,11 @@ class DeterministicValidationEngine:
         # In vehicle quotations or cost breakdowns with 0 or unstated separate tax line:
         if (
             document.subtotal
-            and (document.cost_breakdown or document.document_type in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN))
+            and (
+                document.cost_breakdown
+                or document.document_type
+                in (DocumentClassification.QUOTATION, DocumentClassification.COST_BREAKDOWN)
+            )
             and (not document.tax_amount or float(document.tax_amount.normalized_value) == 0.0)
         ):
             input_ids = [document.subtotal.field_id]

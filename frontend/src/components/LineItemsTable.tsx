@@ -3,6 +3,7 @@
 import React from "react";
 import { ListOrdered } from "lucide-react";
 import { formatCurrency } from "../lib/utils";
+import { StatusBadge, FinancialValue } from "./ui";
 
 export interface ItemRow {
   description: string;
@@ -22,13 +23,13 @@ interface LineItemsTableProps {
 
 export const LineItemsTable: React.FC<LineItemsTableProps> = ({ items, currency }) => {
   return (
-    <div className="glass-panel rounded-2xl p-4 sm:p-6 shadow-card mb-6 border border-white/10">
+    <div className="surface-card rounded-2xl p-5 sm:p-6 shadow-card mb-6 border border-white/10">
       <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-white/10">
         <div className="flex items-center gap-2">
           <ListOrdered className="w-5 h-5 text-brand-400" />
           <h3 className="font-bold text-sm sm:text-base text-white">Itemized Financial Lines</h3>
         </div>
-        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-white/10 text-slate-300">
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-white/10 text-slate-300">
           {items.length} items
         </span>
       </div>
@@ -127,23 +128,19 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({ items, currency 
                         : "-"}
                     </td>
                     <td className="py-2.5 text-right font-bold text-white">
-                      {formatCurrency(item.amount, currency)}
+                      <FinancialValue amount={item.amount} currency={currency} variant="item" />
                     </td>
                     <td className="py-2.5 text-right">
                       {item.status === "PASS" && (
-                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                          PASS
-                        </span>
+                        <StatusBadge status="PASS" label="PASS" />
                       )}
                       {item.status === "REQUIRES_VERIFICATION" && (
-                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          CHECK
-                        </span>
+                        <StatusBadge status="REQUIRES_VERIFICATION" label="CHECK" />
                       )}
-                      {!item.status && <span className="text-slate-500">-</span>}
+                      {!item.status && <span className="text-slate-500">—</span>}
                     </td>
                     <td className="py-2.5 text-right text-slate-500">
-                      <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">
+                      <span className="px-2 py-0.5 rounded bg-white/5 font-mono text-[10px]">
                         {item.linePointer || `line-${idx + 1}`}
                       </span>
                     </td>

@@ -17,3 +17,14 @@ class HealthResponse(BaseModel):
         default_factory=lambda: datetime.now(UTC),
         description="Server timestamp in UTC",
     )
+    gemini_configured: bool = Field(
+        default=False, description="Whether Gemini provider keys are loaded"
+    )
+    groq_configured: bool = Field(
+        default=False, description="Whether Groq provider keys are loaded"
+    )
+    llm_provider: str = Field(default="gemini", description="Configured primary LLM provider")
+    rag_retrieval_mode: str = Field(
+        default="deterministic_sqlite_token_overlap",
+        description="RAG retrieval mechanism",
+    )

@@ -20,13 +20,9 @@ from before_you_pay.models import (
     ChargeNature,
     ComponentCategory,
     CoordinateUnit,
-    DocumentClassification,
     ExtractedField,
     FieldProvenance,
     FinancialComponent,
-    OcrLine,
-    OcrPage,
-    OcrResult,
 )
 from before_you_pay.services.extra_cost_analysis import (
     ExtraCostAnalysisService,
@@ -46,7 +42,10 @@ def _make_component(
     page_id = uuid4()
     line_id = uuid4()
     bbox = BoundingBox(
-        x=0.08, y=0.20, width=0.82, height=0.035,
+        x=0.08,
+        y=0.20,
+        width=0.82,
+        height=0.035,
         coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
     )
     amt_field = ExtractedField(
@@ -100,7 +99,8 @@ class TestNeverFlagBasePriceAndStatutoryTaxes:
 
     def test_deductions_never_flagged(self):
         comp = _make_component(
-            "Discount", 15000.0,
+            "Discount",
+            15000.0,
             category=ComponentCategory.DISCOUNT,
             charge_nature=ChargeNature.DEDUCTION,
         )
@@ -109,7 +109,8 @@ class TestNeverFlagBasePriceAndStatutoryTaxes:
 
     def test_offers_never_flagged(self):
         comp = _make_component(
-            "Dealer Offer", 10000.0,
+            "Dealer Offer",
+            10000.0,
             category=ComponentCategory.OFFER,
             charge_nature=ChargeNature.DEDUCTION,
         )
@@ -121,7 +122,9 @@ class TestExtendedWarrantyFlagging:
     """Extended warranty must be flagged as potentially optional with proper neutral language."""
 
     def test_extended_warranty_flagged(self):
-        comp = _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY)
+        comp = _make_component(
+            "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+        )
         result = ExtraCostAnalysisService.analyze([comp])
 
         assert result.total_flagged_count == 1
@@ -132,7 +135,9 @@ class TestExtendedWarrantyFlagging:
         assert flag.potential_saving == 24000.0
 
     def test_extended_warranty_saving_language_neutral(self):
-        comp = _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY)
+        comp = _make_component(
+            "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+        )
         result = ExtraCostAnalysisService.analyze([comp])
         flag = result.flagged_costs[0]
 
@@ -144,7 +149,9 @@ class TestExtendedWarrantyFlagging:
         assert "could be removed" in flag.saving_language.lower()
 
     def test_extended_warranty_what_to_verify(self):
-        comp = _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY)
+        comp = _make_component(
+            "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+        )
         result = ExtraCostAnalysisService.analyze([comp])
         flag = result.flagged_costs[0]
 
@@ -173,7 +180,8 @@ class TestBundledPackageFlagging:
 
     def test_bundled_package_questions_generated(self):
         comp = _make_component(
-            "Dealer Protection Package", 18000.0,
+            "Dealer Protection Package",
+            18000.0,
             category=ComponentCategory.DEALER_PACKAGE,
         )
         result = ExtraCostAnalysisService.analyze([comp])
@@ -321,8 +329,12 @@ class TestNeutralLanguageEnforcement:
 
     def test_no_prohibited_language_in_any_flag(self):
         components = [
-            _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY),
-            _make_component("Dealer Protection Package", 18000.0, category=ComponentCategory.DEALER_PACKAGE),
+            _make_component(
+                "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+            ),
+            _make_component(
+                "Dealer Protection Package", 18000.0, category=ComponentCategory.DEALER_PACKAGE
+            ),
             _make_component("Handling Charges", 8500.0, category=ComponentCategory.HANDLING_FEE),
             _make_component("XYZ", 5000.0, category=ComponentCategory.UNCLEAR),
             _make_component("Seat Cover", 3000.0, category=ComponentCategory.ACCESSORY),
@@ -344,7 +356,9 @@ class TestCompleteFlagFieldPopulation:
     """Every ExtraCostFlag must have all required fields populated."""
 
     def test_all_fields_populated(self):
-        comp = _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY)
+        comp = _make_component(
+            "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+        )
         result = ExtraCostAnalysisService.analyze([comp])
         flag = result.flagged_costs[0]
 
@@ -364,14 +378,18 @@ class TestReductionSummary:
     """Reduction summary must be accurate and evidence-appropriate."""
 
     def test_no_flags_summary(self):
-        comp = _make_component("Ex-Showroom", 1149900.0, category=ComponentCategory.EX_SHOWROOM_PRICE)
+        comp = _make_component(
+            "Ex-Showroom", 1149900.0, category=ComponentCategory.EX_SHOWROOM_PRICE
+        )
         result = ExtraCostAnalysisService.analyze([comp])
         assert "no charges" in result.reduction_summary.lower()
 
     def test_with_flags_summary_mentions_count_and_amount(self):
         components = [
             _make_component("Ex-Showroom", 1149900.0, category=ComponentCategory.EX_SHOWROOM_PRICE),
-            _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY),
+            _make_component(
+                "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+            ),
             _make_component("Handling Charges", 8500.0, category=ComponentCategory.HANDLING_FEE),
         ]
         result = ExtraCostAnalysisService.analyze(components)
@@ -392,8 +410,12 @@ class TestFullQuotationScenario:
             _make_component("Insurance", 34500.0, category=ComponentCategory.INSURANCE),
             _make_component("Registration", 76250.0, category=ComponentCategory.REGISTRATION),
             _make_component("HSRP", 2250.0, category=ComponentCategory.HSRP),
-            _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY),
-            _make_component("Accessories Package", 15500.0, category=ComponentCategory.ACCESSORY_PACKAGE),
+            _make_component(
+                "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+            ),
+            _make_component(
+                "Accessories Package", 15500.0, category=ComponentCategory.ACCESSORY_PACKAGE
+            ),
             _make_component("Handling Charges", 8500.0, category=ComponentCategory.HANDLING_FEE),
             _make_component("Dealer Offer", 15000.0, category=ComponentCategory.OFFER),
         ]
@@ -402,7 +424,9 @@ class TestFullQuotationScenario:
         # Should NOT flag: Ex-Showroom, TCS, Road Tax, Dealer Offer
         # SHOULD flag: Insurance, Registration, HSRP, Extended Warranty, Accessories Package, Handling Charges
         assert result.total_flagged_count == 6
-        assert result.total_charges_analyzed == 10  # All 10 are charge-nature (offer passed as charge in test data)
+        assert (
+            result.total_charges_analyzed == 10
+        )  # All 10 are charge-nature (offer passed as charge in test data)
 
         flagged_names = {f.what for f in result.flagged_costs}
         # Verify expected items are flagged
@@ -427,7 +451,9 @@ class TestFullQuotationScenario:
             _make_component("Ex-Showroom", 1149900.0, category=ComponentCategory.EX_SHOWROOM_PRICE),
             _make_component("Insurance", 34500.0, category=ComponentCategory.INSURANCE),
             _make_component("Registration", 76250.0, category=ComponentCategory.REGISTRATION),
-            _make_component("Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY),
+            _make_component(
+                "Extended Warranty", 24000.0, category=ComponentCategory.EXTENDED_WARRANTY
+            ),
             _make_component("Handling Charges", 8500.0, category=ComponentCategory.HANDLING_FEE),
         ]
         result = ExtraCostAnalysisService.analyze(components)

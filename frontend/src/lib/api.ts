@@ -1,20 +1,31 @@
 import { DocumentClassification, FinalDecisionSupportResult } from "./types";
 
-const API_BASE = "";
+const isDev = process.env.NODE_ENV === "development";
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE ??
+  (isDev ? "http://127.0.0.1:8000" : "");
+
 
 export async function analyzeDocument(
   file: File,
   userId: string,
-  docType: DocumentClassification = "other"
+  docType: DocumentClassification = "other",
+  supportingFile?: File | null,
+  signal?: AbortSignal
 ): Promise<FinalDecisionSupportResult> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("user_id", userId);
   formData.append("document_classification", docType);
+  if (supportingFile) {
+    formData.append("supporting_file", supportingFile);
+  }
 
   const res = await fetch(`${API_BASE}/api/v1/analyze`, {
     method: "POST",
     body: formData,
+    signal,
   });
 
   if (!res.ok) {
@@ -44,16 +55,22 @@ export async function analyzeDocumentStream(
   file: File,
   userId: string,
   docType: DocumentClassification = "other",
-  onEvent?: (event: StreamEvent) => void
+  onEvent?: (event: StreamEvent) => void,
+  supportingFile?: File | null,
+  signal?: AbortSignal
 ): Promise<FinalDecisionSupportResult> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("user_id", userId);
   formData.append("document_classification", docType);
+  if (supportingFile) {
+    formData.append("supporting_file", supportingFile);
+  }
 
   const res = await fetch(`${API_BASE}/api/v1/analyze/stream`, {
     method: "POST",
     body: formData,
+    signal,
   });
 
   if (!res.ok) {
@@ -85,17 +102,20 @@ export async function analyzeDocumentStream(
     for (const chunk of lines) {
       const trimmed = chunk.trim();
       if (trimmed.startsWith("data: ")) {
+        let event: StreamEvent;
         try {
-          const event: StreamEvent = JSON.parse(trimmed.slice(6));
-          if (onEvent) onEvent(event);
-          if (event.stage === "error") {
-            throw new Error((event as any).error || event.message || "Document analysis failed");
-          }
-          if (event.stage === "complete" && event.result) {
-            finalResult = event.result;
-          }
+          event = JSON.parse(trimmed.slice(6));
         } catch (e) {
           console.error("Failed to parse SSE payload", e);
+          continue;
+        }
+
+        if (onEvent) onEvent(event);
+        if (event.stage === "error") {
+          throw new Error((event as any).error || event.message || "Document analysis failed");
+        }
+        if (event.stage === "complete" && event.result) {
+          finalResult = event.result;
         }
       }
     }

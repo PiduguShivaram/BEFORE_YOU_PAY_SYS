@@ -51,13 +51,24 @@ class DocumentClassification(StrEnum):
     SUBSCRIPTION = "subscription"
     WARRANTY = "warranty"
     INVOICE = "invoice"
+    RECEIPT = "receipt"
+    ESTIMATE = "estimate"
     OTHER = "other"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            val_norm = value.strip().lower()
+            for member in cls:
+                if member.value == val_norm or member.name.lower() == val_norm:
+                    return member
+        return None
 
 
 class ComponentCategory(StrEnum):
     """Categorization of individual components in quotations and breakdowns."""
 
-    # 11 Core Vehicle Categories (Phase 1)
+    # 11 Core Canonical Categories (Phase 1 & Phase 4)
     BASE_PRICE = "base_price"
     TAX_OR_STATUTORY = "tax_or_statutory"
     REGISTRATION = "registration"
@@ -116,11 +127,17 @@ class ComponentCategory(StrEnum):
     def __hash__(self) -> int:
         return hash(self.value)
 
-    def to_vehicle_category(self) -> "ComponentCategory":
-        """Map any fine-grained category to one of the 11 core vehicle categories."""
+    def to_canonical_category(self) -> "ComponentCategory":
+        """Map any fine-grained category to one of the 11 core canonical categories."""
         if self in (ComponentCategory.BASE_PRICE, ComponentCategory.EX_SHOWROOM_PRICE):
             return ComponentCategory.BASE_PRICE
-        if self in (ComponentCategory.TAX_OR_STATUTORY, ComponentCategory.TAX, ComponentCategory.TCS, ComponentCategory.GST, ComponentCategory.ROAD_TAX):
+        if self in (
+            ComponentCategory.TAX_OR_STATUTORY,
+            ComponentCategory.TAX,
+            ComponentCategory.TCS,
+            ComponentCategory.GST,
+            ComponentCategory.ROAD_TAX,
+        ):
             return ComponentCategory.TAX_OR_STATUTORY
         if self in (ComponentCategory.REGISTRATION, ComponentCategory.RC, ComponentCategory.HSRP):
             return ComponentCategory.REGISTRATION
@@ -132,7 +149,16 @@ class ComponentCategory(StrEnum):
             return ComponentCategory.SERVICE
         if self in (ComponentCategory.ACCESSORY, ComponentCategory.ACCESSORY_PACKAGE):
             return ComponentCategory.ACCESSORY
-        if self in (ComponentCategory.DEALER_CHARGE, ComponentCategory.HANDLING_FEE, ComponentCategory.LOGISTICS_FEE, ComponentCategory.PROCESSING_FEE, ComponentCategory.DEALER_PACKAGE, ComponentCategory.FASTAG, ComponentCategory.OTHER_FEE):
+        if self in (
+            ComponentCategory.DEALER_CHARGE,
+            ComponentCategory.HANDLING_FEE,
+            ComponentCategory.LOGISTICS_FEE,
+            ComponentCategory.PROCESSING_FEE,
+            ComponentCategory.DEALER_PACKAGE,
+            ComponentCategory.FASTAG,
+            ComponentCategory.OTHER_FEE,
+            ComponentCategory.ACCESSORY_OR_FEE,
+        ):
             return ComponentCategory.DEALER_CHARGE
         if self == ComponentCategory.FINANCING:
             return ComponentCategory.FINANCING
@@ -142,12 +168,54 @@ class ComponentCategory(StrEnum):
             return ComponentCategory.UNKNOWN
         return ComponentCategory.OTHER
 
+    def to_vehicle_category(self) -> "ComponentCategory":
+        """Map any fine-grained category to one of the 11 core vehicle categories."""
+        return self.to_canonical_category()
+
 
 class ChargeNature(StrEnum):
-    """Nature of the financial component: positive charge vs negative deduction."""
+    """Nature of the financial component: charge, deduction, tax, statutory fee, discount, or included."""
 
     CHARGE = "charge"
     DEDUCTION = "deduction"
+    TAX = "tax"
+    STATUTORY = "statutory"
+    DISCOUNT = "discount"
+    INCLUDED = "included"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            val_norm = value.strip().lower()
+            if val_norm in ("deduction", "negative", "minus", "less"):
+                return cls.DEDUCTION
+            if val_norm in ("discount", "rebate", "offer"):
+                return cls.DISCOUNT
+            if val_norm in ("charge", "fee", "cost", "positive"):
+                return cls.CHARGE
+            if val_norm in ("tax", "taxes"):
+                return cls.TAX
+            if val_norm in ("statutory", "govt", "government"):
+                return cls.STATUTORY
+            if val_norm in ("included", "foc", "bundled"):
+                return cls.INCLUDED
+            if val_norm in ("unknown", "unclear"):
+                return cls.UNKNOWN
+            for member in cls:
+                if member.value == val_norm or member.name.lower() == val_norm:
+                    return member
+        return None
+
+    @property
+    def is_deduction(self) -> bool:
+        """Return True if this charge nature represents an arithmetic deduction or discount."""
+        return self in (ChargeNature.DEDUCTION, ChargeNature.DISCOUNT)
+
+    @property
+    def is_additive(self) -> bool:
+        """Return True if this charge nature represents an additive cost, tax, or statutory fee."""
+        return self in (ChargeNature.CHARGE, ChargeNature.TAX, ChargeNature.STATUTORY)
 
 
 class OptionalityStatus(StrEnum):
@@ -185,11 +253,21 @@ class OptionalityStatus(StrEnum):
             other_norm = other.strip().lower()
             if self.value == other_norm or self.name.lower() == other_norm:
                 return True
-            if self.value == "confirmed_mandatory" and other_norm in ("mandatory", "confirmed_mandatory"):
+            if self.value == "confirmed_mandatory" and other_norm in (
+                "mandatory",
+                "confirmed_mandatory",
+            ):
                 return True
-            if self.value == "confirmed_optional" and other_norm in ("optional", "confirmed_optional"):
+            if self.value == "confirmed_optional" and other_norm in (
+                "optional",
+                "confirmed_optional",
+            ):
                 return True
-            if self.value == "potentially_optional" and other_norm in ("optional", "potentially_optional", "potential_optional"):
+            if self.value == "potentially_optional" and other_norm in (
+                "optional",
+                "potentially_optional",
+                "potential_optional",
+            ):
                 return True
             if self.value == "unclear" and other_norm in ("unclear", "unknown"):
                 return True
@@ -210,13 +288,19 @@ class ChargeStatus(StrEnum):
     OPTIONAL = "OPTIONAL"
     POTENTIALLY_OPTIONAL = "POTENTIALLY_OPTIONAL"
     NEGOTIABLE = "NEGOTIABLE"
+    POTENTIALLY_NEGOTIABLE = "POTENTIALLY_NEGOTIABLE"
     INCLUDED_ELSEWHERE = "INCLUDED_ELSEWHERE"
     UNKNOWN = "UNKNOWN"
+    REQUIRES_VERIFICATION = "REQUIRES_VERIFICATION"
 
     @classmethod
     def _missing_(cls, value: object) -> Any:
         if isinstance(value, str):
             val_norm = value.strip().upper().replace(" ", "_").replace("-", "_")
+            if val_norm in ("POTENTIALLY_NEGOTIABLE", "POTENTIAL_NEGOTIABLE"):
+                return cls.POTENTIALLY_NEGOTIABLE
+            if val_norm in ("REQUIRES_VERIFICATION", "REQUIRE_VERIFICATION", "VERIFY"):
+                return cls.REQUIRES_VERIFICATION
             for member in cls:
                 if member.value == val_norm or member.name == val_norm:
                     return member
@@ -227,6 +311,11 @@ class ChargeStatus(StrEnum):
             return self.value == other.value
         if isinstance(other, str):
             other_norm = other.strip().upper().replace(" ", "_").replace("-", "_")
+            if self.value == "POTENTIALLY_NEGOTIABLE" and other_norm in (
+                "NEGOTIABLE",
+                "POTENTIALLY_NEGOTIABLE",
+            ):
+                return True
             return self.value == other_norm or self.name == other_norm
         return super().__eq__(other)
 
@@ -240,9 +329,22 @@ CHARGE_STATUS_DISPLAY_LABELS: dict[ChargeStatus, str] = {
     ChargeStatus.OPTIONAL: "Optional",
     ChargeStatus.POTENTIALLY_OPTIONAL: "Potentially optional",
     ChargeStatus.NEGOTIABLE: "Potentially negotiable",
+    ChargeStatus.POTENTIALLY_NEGOTIABLE: "Potentially negotiable",
     ChargeStatus.INCLUDED_ELSEWHERE: "Included elsewhere",
     ChargeStatus.UNKNOWN: "Unknown",
+    ChargeStatus.REQUIRES_VERIFICATION: "Requires verification",
 }
+
+
+class AmountState(StrEnum):
+    """Semantic state of a financial amount representation."""
+
+    PRESENT = "PRESENT"
+    MISSING = "MISSING"
+    UNKNOWN = "UNKNOWN"
+    UNREADABLE = "UNREADABLE"
+    ZERO = "ZERO"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 class DocumentMetadata(BaseModel):
@@ -336,6 +438,34 @@ class ExtractedField(BaseModel):
     unit_or_currency: str | None = None
     confidence: float = Field(..., ge=0.0, le=1.0)
     provenance: FieldProvenance
+    amount_state: AmountState = Field(default=AmountState.PRESENT)
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_amount_state(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        user_state = data.get("amount_state")
+        if user_state:
+            try:
+                data["amount_state"] = AmountState(user_state)
+                return data
+            except ValueError:
+                pass
+        val = data.get("normalized_value")
+        if val is None:
+            data["amount_state"] = AmountState.MISSING
+        elif isinstance(val, str) and val.upper() in ("UNKNOWN",):
+            data["amount_state"] = AmountState.UNKNOWN
+        elif isinstance(val, str) and val.upper() in ("UNREADABLE",):
+            data["amount_state"] = AmountState.UNREADABLE
+        elif isinstance(val, str) and val.upper() in ("NOT_APPLICABLE", "N/A", "NA"):
+            data["amount_state"] = AmountState.NOT_APPLICABLE
+        elif isinstance(val, (int, float)) and val == 0.0:
+            data["amount_state"] = AmountState.ZERO
+        else:
+            data["amount_state"] = AmountState.PRESENT
+        return data
 
 
 class LineItem(BaseModel):
@@ -361,16 +491,20 @@ class FinancialComponent(BaseModel):
 
     component_id: UUID = Field(default_factory=uuid4)
     name: str = Field(..., min_length=1)
+    original_label: str | None = None
     raw_text: str | None = None
     raw_name: str | None = None
     raw_label: str | None = None
     normalized_name: str | None = None
     normalized_label: str | None = None
     amount: ExtractedField
+    amount_state: AmountState = Field(default=AmountState.PRESENT)
     category: ComponentCategory = Field(default=ComponentCategory.UNKNOWN)
+    canonical_category: ComponentCategory = Field(default=ComponentCategory.UNKNOWN)
     vehicle_category: ComponentCategory = Field(default=ComponentCategory.UNKNOWN)
     charge_nature: ChargeNature = Field(default=ChargeNature.CHARGE)
     charge_or_deduction: str = Field(default="charge")
+    requirement_status: ChargeStatus | str | None = None
     optionality_status: OptionalityStatus = Field(default=OptionalityStatus.UNCLEAR)
     optionality_display: str | None = None
     document_states: str | None = None
@@ -384,9 +518,16 @@ class FinancialComponent(BaseModel):
     requires_verification: bool = Field(default=False)
     evidence: str | None = None
     source_ocr_line: str | None = None
+    ocr_reference: str | None = None
+    source_document_id: UUID | None = None
     bounding_box: BoundingBox | None = None
     page: int | None = Field(default=1, ge=1)
     explanation: str | None = None
+    is_recurring: bool | None = None
+    billing_frequency: str | None = None
+    effective_period: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -446,14 +587,30 @@ class FinancialComponent(BaseModel):
             except ValueError:
                 data["category"] = inferred_cat
 
-        # Vehicle Category (11 core vehicle categories)
+        # Canonical Category (11 established categories) & Vehicle Category alias
         if isinstance(data["category"], ComponentCategory):
-            data["vehicle_category"] = data["category"].to_vehicle_category()
+            data["canonical_category"] = data["category"].to_canonical_category()
         else:
             try:
-                data["vehicle_category"] = ComponentCategory(data["category"]).to_vehicle_category()
+                data["canonical_category"] = ComponentCategory(
+                    data["category"]
+                ).to_canonical_category()
             except ValueError:
-                data["vehicle_category"] = ComponentCategory.UNKNOWN
+                data["canonical_category"] = ComponentCategory.UNKNOWN
+        data["vehicle_category"] = data["canonical_category"]
+
+        # Temporal / recurring semantics
+        if data.get("is_recurring") is None and data.get("billing_frequency") is None:
+            from before_you_pay.services.temporal_semantics import TemporalSemanticsService
+
+            temporal_info = TemporalSemanticsService.extract_temporal_info(
+                f"{raw_val} {data.get('evidence') or ''}"
+            )
+            data["is_recurring"] = temporal_info.is_recurring
+            data["billing_frequency"] = temporal_info.billing_frequency
+            data["effective_period"] = temporal_info.effective_period
+            data["period_start"] = temporal_info.period_start
+            data["period_end"] = temporal_info.period_end
 
         # Normalized name (taxonomy canonical name)
         norm_name = data.get("normalized_name") or inferred_norm_name
@@ -536,10 +693,14 @@ class FinancialComponent(BaseModel):
         )
 
         data["optionality_status"] = opt_assessment.status
-        data["optionality_display"] = data.get("optionality_display") or opt_assessment.display_label
+        data["optionality_display"] = (
+            data.get("optionality_display") or opt_assessment.display_label
+        )
         data["document_states"] = data.get("document_states") or opt_assessment.document_states
         data["system_knows"] = data.get("system_knows") or opt_assessment.system_knows
-        data["requires_confirmation"] = data.get("requires_confirmation") or opt_assessment.requires_confirmation
+        data["requires_confirmation"] = (
+            data.get("requires_confirmation") or opt_assessment.requires_confirmation
+        )
 
         # Optionality boolean flag
         # Optionality boolean flag
@@ -574,13 +735,43 @@ class FinancialComponent(BaseModel):
             explicit_status=data.get("charge_status"),
         )
         data["charge_status"] = charge_assessment.status
-        data["charge_status_display"] = data.get("charge_status_display") or charge_assessment.display_label
+        data["charge_status_display"] = (
+            data.get("charge_status_display") or charge_assessment.display_label
+        )
         data["charge_status_reason"] = data.get("charge_status_reason") or charge_assessment.reason
         data["requires_verification"] = bool(
             data.get("requires_verification")
             or charge_assessment.requires_verification
             or data.get("requires_confirmation")
         )
+
+        # Canonical attributes
+        data["original_label"] = (
+            data.get("original_label") or data.get("raw_label") or data.get("raw_text") or raw_val
+        )
+        data["requirement_status"] = (
+            data.get("requirement_status") or data.get("charge_status") or ChargeStatus.UNKNOWN
+        )
+        data["ocr_reference"] = data.get("ocr_reference") or data.get("source_ocr_line")
+
+        user_amt_state = data.get("amount_state")
+        if user_amt_state:
+            try:
+                data["amount_state"] = AmountState(user_amt_state)
+            except ValueError:
+                data["amount_state"] = AmountState.PRESENT
+        elif amt_val is None:
+            data["amount_state"] = AmountState.MISSING
+        elif isinstance(amt_val, str) and amt_val.upper() in ("UNKNOWN",):
+            data["amount_state"] = AmountState.UNKNOWN
+        elif isinstance(amt_val, str) and amt_val.upper() in ("UNREADABLE",):
+            data["amount_state"] = AmountState.UNREADABLE
+        elif isinstance(amt_val, str) and amt_val.upper() in ("NOT_APPLICABLE", "N/A", "NA"):
+            data["amount_state"] = AmountState.NOT_APPLICABLE
+        elif isinstance(amt_val, (int, float)) and amt_val == 0.0:
+            data["amount_state"] = AmountState.ZERO
+        else:
+            data["amount_state"] = AmountState.PRESENT
 
         return data
 
@@ -616,31 +807,75 @@ class FinancialComponent(BaseModel):
             else str(self.charge_status)
         )
 
+        req_status_str = (
+            self.requirement_status.value
+            if hasattr(self.requirement_status, "value")
+            else str(self.requirement_status or chg_status_str)
+        )
+
+        if self.amount_state in (
+            AmountState.MISSING,
+            AmountState.UNKNOWN,
+            AmountState.UNREADABLE,
+            AmountState.NOT_APPLICABLE,
+        ):
+            amt_output = None
+        elif isinstance(amt_val, (int, float)):
+            amt_output = float(amt_val)
+        else:
+            amt_output = None
+
         return {
+            "original_label": self.original_label or self.raw_label or self.raw_name or self.name,
             "raw_text": self.raw_text or self.raw_label or self.raw_name or self.name,
             "raw_label": self.raw_label or self.raw_name or self.name,
             "normalized_label": self.normalized_label or self.normalized_name or self.name,
             "category": cat_str,
+            "canonical_category": (
+                self.canonical_category.value
+                if hasattr(self.canonical_category, "value")
+                else (
+                    self.category.to_canonical_category().value
+                    if hasattr(self.category, "to_canonical_category")
+                    else cat_str
+                )
+            ),
             "vehicle_category": (
                 self.vehicle_category.value
                 if hasattr(self.vehicle_category, "value")
-                else (self.category.to_vehicle_category().value if hasattr(self.category, "to_vehicle_category") else cat_str)
+                else (
+                    self.category.to_canonical_category().value
+                    if hasattr(self.category, "to_canonical_category")
+                    else cat_str
+                )
             ),
-            "amount": float(amt_val),
+            "amount": amt_output,
+            "amount_state": (
+                self.amount_state.value
+                if hasattr(self.amount_state, "value")
+                else str(self.amount_state)
+            ),
             "confidence": float(self.confidence),
             "charge_status": chg_status_str,
-            "charge_status_display": self.charge_status_display or CHARGE_STATUS_DISPLAY_LABELS.get(self.charge_status, "Unknown"),
+            "requirement_status": req_status_str,
+            "charge_status_display": self.charge_status_display
+            or CHARGE_STATUS_DISPLAY_LABELS.get(self.charge_status, "Unknown"),
             "charge_status_reason": self.charge_status_reason or self.explanation or "",
             "reason": self.charge_status_reason or self.explanation or "",
             "requires_verification": bool(self.requires_verification),
             "page": self.page or 1,
             "bounding_box": self.bounding_box.model_dump() if self.bounding_box else None,
             "evidence": str(ev_text),
+            "source_document_id": str(self.source_document_id) if self.source_document_id else None,
+            "ocr_reference": self.ocr_reference or self.source_ocr_line,
             "optionality_status": opt_status_str,
             "optionality_display": self.optionality_display,
             "document_states": self.document_states,
             "system_knows": self.system_knows,
             "requires_confirmation": self.requires_confirmation,
+            "is_recurring": self.is_recurring,
+            "billing_frequency": self.billing_frequency,
+            "effective_period": self.effective_period,
         }
 
 

@@ -23,7 +23,13 @@ class AllApiKeysExhaustedError(Exception):
 
 
 class RateLimitError(Exception):
-    """Raised when a specific API key encounters rate limits or service unavailability."""
+    """Raised when a specific API key encounters rate limits or quota exhaustion."""
+
+    pass
+
+
+class ModelUnavailableError(Exception):
+    """Raised when a specific model encounters temporary high demand or 503/502."""
 
     pass
 
@@ -64,8 +70,10 @@ class GeminiClient:
                 if candidates and candidates[0].get("content", {}).get("parts"):
                     return candidates[0]["content"]["parts"][0]["text"]
                 return "{}"
-            if resp.status_code in (429, 503):
-                raise RateLimitError(f"HTTP {resp.status_code}: {resp.text}")
+            if resp.status_code == 429:
+                raise RateLimitError(f"HTTP 429: {resp.text}")
+            if resp.status_code in (502, 503):
+                raise ModelUnavailableError(f"HTTP {resp.status_code}: {resp.text}")
             resp.raise_for_status()
             return "{}"
 
@@ -84,7 +92,10 @@ class LlmKeyManager:
         if api_keys is not None:
             self._keys = [k for k in api_keys if k and k.strip()]
         else:
-            self._keys = settings.active_llm_api_keys
+            if "groq" in self.provider:
+                self._keys = settings.groq_api_keys or settings.gemini_api_keys
+            else:
+                self._keys = settings.gemini_api_keys or settings.groq_api_keys
 
         if model is not None:
             self.model = model
@@ -128,13 +139,20 @@ class LlmKeyManager:
             return "***"
         return "N/A"
 
-    def get_client(self) -> GeminiClient:
+    def get_client(self) -> Any:
         """Get API client initialized with the current active key."""
         if not self._keys:
             raise AllApiKeysExhaustedError(
                 f"No {self.provider.upper()} API keys configured in pool."
             )
         current_key = self._keys[self._current_index]
+        if "groq" in self.provider:
+            try:
+                from groq import Groq
+
+                return Groq(api_key=current_key)
+            except ImportError:
+                return GeminiClient(api_key=current_key)
         return GeminiClient(api_key=current_key)
 
     def rotate_to_next_key(self, reason: str = "Quota exhausted") -> int:
@@ -184,33 +202,85 @@ class LlmKeyManager:
         attempts = 0
         max_attempts = self.key_count
 
+        models_to_try = [self.model]
+        if "gemini" in self.provider:
+            settings = get_settings()
+            for m in [
+                getattr(settings, "gemini_model_primary", "gemini-3.6-flash"),
+                getattr(settings, "gemini_model_fast", "gemini-3.1-flash-lite"),
+                "gemini-3.6-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-flash-lite-latest",
+            ]:
+                if m and m not in models_to_try:
+                    models_to_try.append(m)
+        elif "groq" in self.provider:
+            settings = get_settings()
+            for m in [
+                getattr(settings, "groq_model", "qwen/qwen3.8-27b"),
+                "qwen/qwen3.8-27b",
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+            ]:
+                if m and m not in models_to_try:
+                    models_to_try.append(m)
+
         while attempts < max_attempts:
             client = self.get_client()
             current_label = self.active_key_label
-            try:
-                result = call_fn(client, self.model)
-                return result, current_label
-            except Exception as exc:
-                err_msg = str(exc).lower()
-                is_rate_limit = (
-                    isinstance(exc, RateLimitError)
-                    or "rate limit" in err_msg
-                    or "quota" in err_msg
-                    or "resource_exhausted" in err_msg
-                    or "429" in err_msg
-                    or "503" in err_msg
-                    or "unavailable" in err_msg
-                )
-
-                if is_rate_limit:
-                    attempts += 1
-                    logger.warning("Quota / Rate Limit error on %s: %s", current_label, str(exc))
-                    try:
-                        self.rotate_to_next_key(reason=f"Quota / RateLimit: {exc}")
-                    except AllApiKeysExhaustedError:
+            last_exc = None
+            for model_candidate in models_to_try:
+                try:
+                    result = call_fn(client, model_candidate)
+                    return result, current_label
+                except Exception as exc:
+                    last_exc = exc
+                    err_msg = str(exc).lower()
+                    is_server_error = (
+                        isinstance(exc, ModelUnavailableError)
+                        or "503" in err_msg
+                        or "502" in err_msg
+                        or "unavailable" in err_msg
+                        or "high demand" in err_msg
+                        or "404" in err_msg
+                        or "not found" in err_msg
+                        or ("429" in err_msg and "model:" in err_msg)
+                    )
+                    is_rate_limit = not is_server_error and (
+                        isinstance(exc, RateLimitError)
+                        or "rate limit" in err_msg
+                        or "quota" in err_msg
+                        or "resource_exhausted" in err_msg
+                        or "429" in err_msg
+                        or "timeout" in err_msg
+                        or "timed out" in err_msg
+                    )
+                    if is_server_error:
+                        logger.warning(
+                            "Model %s error (%s) on %s, checking alternatives...",
+                            model_candidate,
+                            str(exc)[:100],
+                            current_label,
+                        )
+                        continue
+                    elif is_rate_limit:
+                        logger.warning(
+                            "API key rate limit/timeout (%s) on %s, switching key...",
+                            str(exc)[:100],
+                            current_label,
+                        )
+                        break
+                    else:
                         raise
-                else:
-                    raise
+
+            attempts += 1
+            logger.warning(
+                "Quota / Rate Limit error on all models for %s: %s", current_label, str(last_exc)
+            )
+            try:
+                self.rotate_to_next_key(reason=f"Quota / RateLimit: {last_exc}")
+            except AllApiKeysExhaustedError:
+                raise
 
         raise AllApiKeysExhaustedError(
             f"Exhausted all {self.key_count} keys without successful completion."

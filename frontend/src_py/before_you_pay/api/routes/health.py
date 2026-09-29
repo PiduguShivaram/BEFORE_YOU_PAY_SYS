@@ -22,4 +22,8 @@ async def health_check() -> HealthResponse:
         status="ok",
         app_name=settings.app_name,
         version=__version__,
+        gemini_configured=bool(settings.gemini_api_keys),
+        groq_configured=bool(settings.groq_api_keys),
+        llm_provider=settings.llm_provider,
+        rag_retrieval_mode="deterministic_sqlite_token_overlap",
     )

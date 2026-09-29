@@ -5,18 +5,15 @@ import { Navbar } from "../components/Navbar";
 import { Dropzone } from "../components/Dropzone";
 import { PipelineProgress } from "../components/PipelineProgress";
 import { VerdictBanner } from "../components/VerdictBanner";
-import { DecisionFlags } from "../components/DecisionFlags";
+import { BeforeYouPayFinalSummaryView } from "../components/BeforeYouPayFinalSummaryView";
 import { MathVerification } from "../components/MathVerification";
 import { LineItemsTable } from "../components/LineItemsTable";
 import { DocumentViewer } from "../components/DocumentViewer";
 import { RagDrawer } from "../components/RagDrawer";
 import { OkfModal } from "../components/OkfModal";
 import { CostBreakdownCard } from "../components/CostBreakdownCard";
-import { ExtraCostAnalysisCard } from "../components/ExtraCostAnalysisCard";
-import { PlainLanguageExplanationCard } from "../components/PlainLanguageExplanationCard";
-import { PotentialCostReductionCard } from "../components/PotentialCostReductionCard";
-import { SmartQuestionsCard } from "../components/SmartQuestionsCard";
 import { WaysToReviewCostCard } from "../components/WaysToReviewCostCard";
+import { MobileFailureRecovery, MobileFailureState } from "../components/MobileFailureRecovery";
 import {
   DecisionFlag,
   DocumentClassification,
@@ -25,7 +22,7 @@ import {
   OkfRule,
   RagRecord,
 } from "../lib/types";
-import { analyzeDocumentStream, checkBackendHealth, StreamEvent } from "../lib/api";
+import { analyzeDocument, analyzeDocumentStream, checkBackendHealth, StreamEvent } from "../lib/api";
 import { generateUUID } from "../lib/utils";
 import { Shield, Sparkles } from "lucide-react";
 
@@ -35,10 +32,14 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [streamEvent, setStreamEvent] = useState<StreamEvent | null>(null);
   const [result, setResult] = useState<FinalDecisionSupportResult | null>(null);
+  const [primaryFile, setPrimaryFile] = useState<File | null>(null);
+  const [primaryDocType, setPrimaryDocType] = useState<DocumentClassification>("other");
   const [documentText, setDocumentText] = useState<string>("");
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [selectedFlag, setSelectedFlag] = useState<DecisionFlag | null>(null);
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [analysisError, setAnalysisError] = useState<MobileFailureState | null>(null);
+  const abortControllerRef = React.useRef<AbortController | null>(null);
 
   // Modals state
   const [isRagOpen, setIsRagOpen] = useState<boolean>(false);
@@ -143,13 +144,29 @@ export default function Home() {
     localStorage.setItem("byp_rag_records", JSON.stringify(updated));
   };
 
-  // Upload & Analyze Handler
-  const handleFileSelect = async (file: File, docType: DocumentClassification) => {
+  // Upload & Analyze Handler with request cancellation and race condition protection
+  const handleFileSelect = async (
+    file: File,
+    docType: DocumentClassification,
+    supportingFile?: File | null
+  ) => {
+    if (isProcessing) return;
+
+    // Abort any prior in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsProcessing(true);
     setResult(null);
     setSelectedFlag(null);
     setSelectedComponentId(null);
     setStreamEvent(null);
+    setAnalysisError(null);
+    setPrimaryFile(file);
+    setPrimaryDocType(docType);
 
     // Create image preview if image
     if (file.type.startsWith("image/")) {
@@ -172,27 +189,123 @@ export default function Home() {
     }
 
     try {
-      const data = await analyzeDocumentStream(file, userId, docType, (event) => {
-        setStreamEvent(event);
-      });
-      setResult(data);
+      let data: FinalDecisionSupportResult;
+      try {
+        data = await analyzeDocumentStream(
+          file,
+          userId,
+          docType,
+          (event) => {
+            if (!controller.signal.aborted) {
+              setStreamEvent(event);
+            }
+          },
+          supportingFile,
+          controller.signal
+        );
+      } catch (streamErr: any) {
+        if (streamErr?.name === "AbortError" || controller.signal.aborted) return;
+        console.warn("SSE stream failed, falling back to direct POST /analyze", streamErr);
+        data = await analyzeDocument(file, userId, docType, supportingFile, controller.signal);
+      }
+      if (!controller.signal.aborted) {
+        setResult(data);
+      }
     } catch (err: any) {
-      alert(`Document Analysis Rejected: ${err.message}`);
+      if (err?.name === "AbortError" || controller.signal.aborted) {
+        return;
+      }
+      setAnalysisError({
+        title: "Document Analysis Rejected",
+        message:
+          err.message ||
+          "Document could not be verified by the 7-stage engine. Please ensure the scan is clear, flat, and legible.",
+        onRetry: () => handleFileSelect(file, docType, supportingFile),
+        onRetake: () => {
+          setAnalysisError(null);
+          handleReset();
+        },
+        onChooseFile: () => {
+          setAnalysisError(null);
+          handleReset();
+        },
+      });
     } finally {
-      setIsProcessing(false);
+      if (!controller.signal.aborted) {
+        setIsProcessing(false);
+      }
+    }
+  };
+
+  const handleAddSupportingDocument = async (supportingFile: File) => {
+    if (!primaryFile || isProcessing) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setIsProcessing(true);
+    setStreamEvent(null);
+    setAnalysisError(null);
+    try {
+      let data: FinalDecisionSupportResult;
+      try {
+        data = await analyzeDocumentStream(
+          primaryFile,
+          userId,
+          primaryDocType,
+          (event) => {
+            if (!controller.signal.aborted) {
+              setStreamEvent(event);
+            }
+          },
+          supportingFile,
+          controller.signal
+        );
+      } catch (streamErr: any) {
+        if (streamErr?.name === "AbortError" || controller.signal.aborted) return;
+        console.warn("SSE stream fallback to direct POST /analyze for supporting doc", streamErr);
+        data = await analyzeDocument(primaryFile, userId, primaryDocType, supportingFile, controller.signal);
+      }
+      if (!controller.signal.aborted) {
+        setResult(data);
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError" || controller.signal.aborted) {
+        return;
+      }
+      setAnalysisError({
+        title: "Supporting Document Analysis Failed",
+        message: err.message || "Failed to compare with supporting document.",
+        onRetry: () => handleAddSupportingDocument(supportingFile),
+        onChooseFile: () => setAnalysisError(null),
+      });
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsProcessing(false);
+      }
     }
   };
 
   const handleReset = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     if (imagePreviewUrl) {
       URL.revokeObjectURL(imagePreviewUrl);
     }
+    setPrimaryFile(null);
     setResult(null);
     setSelectedFlag(null);
     setSelectedComponentId(null);
     setDocumentText("");
     setImagePreviewUrl(null);
     setStreamEvent(null);
+    setAnalysisError(null);
+    setIsProcessing(false);
   };
 
   const handleSelectComponent = (comp: FinancialComponent) => {
@@ -220,6 +333,73 @@ export default function Home() {
 
   const handleReturnToSummary = () => {
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleInspectFieldId = (fieldId: string, label?: string) => {
+    const comp = result?.document?.cost_breakdown?.find(
+      (c) => c.amount?.field_id === fieldId || c.component_id === fieldId
+    );
+    if (comp?.amount?.provenance?.bounding_box) {
+      handleSelectComponent(comp);
+      return;
+    }
+    const item = result?.document?.line_items?.find(
+      (li) => li.total_price?.field_id === fieldId || li.unit_price?.field_id === fieldId
+    );
+    const box = item?.total_price?.provenance?.bounding_box || item?.unit_price?.provenance?.bounding_box;
+    if (box) {
+      setSelectedFlag({
+        flag_id: fieldId,
+        claim_type: "requires_verification",
+        label: item?.description?.normalized_value ? String(item.description.normalized_value) : label || fieldId,
+        message: `${label || fieldId}`,
+        severity: "INFO",
+        field_ids: [fieldId],
+        bounding_boxes: [box],
+      });
+      setTimeout(() => {
+        const viewer = document.getElementById("document-evidence-viewer");
+        if (viewer) {
+          viewer.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 50);
+      return;
+    }
+    const flag = result?.flags?.find(
+      (f) => f.field_ids?.includes(fieldId) || f.label.toLowerCase() === label?.toLowerCase()
+    );
+    if (flag) {
+      setSelectedFlag(flag);
+      setTimeout(() => {
+        const viewer = document.getElementById("document-evidence-viewer");
+        if (viewer) {
+          viewer.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 50);
+    }
+  };
+
+  const handleSelectLineItem = (item: any) => {
+    const fieldId = item.total_price?.field_id || item.unit_price?.field_id;
+    const box = item.total_price?.provenance?.bounding_box || item.unit_price?.provenance?.bounding_box;
+    const desc = item.description?.normalized_value ? String(item.description.normalized_value) : "Line Item";
+    if (box) {
+      setSelectedFlag({
+        flag_id: fieldId || generateUUID(),
+        claim_type: "requires_verification",
+        label: desc,
+        message: `${desc}: ${item.total_price?.normalized_value ?? ""}`,
+        severity: "INFO",
+        field_ids: fieldId ? [fieldId] : [],
+        bounding_boxes: [box],
+      });
+      setTimeout(() => {
+        const viewer = document.getElementById("document-evidence-viewer");
+        if (viewer) {
+          viewer.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 50);
+    }
   };
 
   // Parse extracted items from document result or fallback text
@@ -299,7 +479,7 @@ export default function Home() {
       />
 
       <main className="max-w-6xl mx-auto w-full px-3.5 sm:px-6 lg:px-8 space-y-5">
-        {/* Hero Section (Compact for Mobile) */}
+        {/* Hero Section (Phone-First Headline) */}
         {!result && (
           <div className="text-center max-w-xl mx-auto pt-2 pb-1 space-y-2">
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -307,203 +487,143 @@ export default function Home() {
               <span>Strict Source Provenance • Deterministic Arithmetic</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
-              Audit Before You Pay
+              What do you want to check before you pay?
             </h1>
             <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-md mx-auto">
-              Scan any quotation, invoice, or bill. Verifies mathematical consistency, detects ancillary charges, and cross-references your prior terms.
+              Scan bills, vehicle quotations, warranties, or contracts. Verifies line-item math, reveals ancillary fees, and flags optional charges before you commit money.
             </p>
           </div>
+        )}
+
+        {/* Real Failure State Banner & Recovery Actions */}
+        {analysisError && (
+          <MobileFailureRecovery
+            error={analysisError}
+            onDismiss={() => setAnalysisError(null)}
+          />
         )}
 
         {/* 2. Primary Scan Document Action / Upload Flow */}
         {!result ? (
           <>
-            <Dropzone onFileSelect={handleFileSelect} isProcessing={isProcessing} />
+            <Dropzone
+              onFileSelect={handleFileSelect}
+              isProcessing={isProcessing}
+              selectedPrimaryFile={primaryFile}
+              onClearPrimaryFile={handleReset}
+            />
             <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
           </>
         ) : (
           <div className="space-y-6 animate-in fade-in duration-300">
-            {/* 3, 4, 5. Verdict Banner (Document Status + Financial Commitment + Decision Finding) */}
-            <VerdictBanner result={result} onReset={handleReset} />
+            {isProcessing && (
+              <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
+            )}
 
-            {/* Results Hierarchy */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Primary Column (Cost Breakdown, Flags, Arithmetic Verification) */}
-              <div className="lg:col-span-7 space-y-6">
-                {/* Phase 8: Plain-Language Financial Explanation */}
-                {result?.plain_language_explanation && (
-                  <PlainLanguageExplanationCard
-                    explanation={result.plain_language_explanation}
-                  />
-                )}
-
-                {/* 6. Cost Breakdown (Stacked Mobile Rows with Tap-to-Inspect) */}
-                {result?.document?.cost_breakdown && result.document.cost_breakdown.length > 0 && (
-                  <CostBreakdownCard
-                    components={result.document.cost_breakdown}
-                    currency={result.document.currency}
-                    subtotal={
-                      result.document.subtotal?.normalized_value != null
-                        ? Number(result.document.subtotal.normalized_value)
-                        : null
-                    }
-                    discountTotal={
-                      result.document.discount_amount?.normalized_value != null
-                        ? Number(result.document.discount_amount.normalized_value)
-                        : null
-                    }
-                    quotedTotal={Number(result.document.total_amount?.normalized_value || 0)}
-                    validationChecks={result.validation_checks}
-                    selectedComponentId={selectedComponentId}
-                    onSelectComponent={handleSelectComponent}
-                    smartQuestions={result.smart_questions}
-                  />
-                )}
-
-                {/* Phase 7: Potential Cost Reduction Summary */}
-                {result?.cost_reduction_summary && (
-                  <PotentialCostReductionCard
-                    summary={result.cost_reduction_summary}
-                    currency={result.document?.currency}
-                  />
-                )}
-
-                {/* Potential Extra Costs & Cost Reduction Analysis */}
-                {result?.extra_cost_analysis && result.extra_cost_analysis.flagged_costs && result.extra_cost_analysis.flagged_costs.length > 0 && (
-                  <ExtraCostAnalysisCard
-                    analysis={result.extra_cost_analysis}
-                    currency={result.document?.currency}
-                  />
-                )}
-
-                {/* Phase 5: Ways to Review This Cost */}
-                {result?.document?.cost_breakdown && result.document.cost_breakdown.length > 0 && (
-                  <WaysToReviewCostCard
-                    components={result.document.cost_breakdown}
-                    extraCostAnalysis={result.extra_cost_analysis}
-                    smartQuestions={result.smart_questions}
-                    validationChecks={result.validation_checks}
-                    currency={result.document?.currency}
-                  />
-                )}
-
-                {/* Questions to ask before paying */}
-                {result?.smart_questions && result.smart_questions.length > 0 && (
-                  <SmartQuestionsCard
-                    questions={result.smart_questions}
-                    currency={result.document?.currency}
-                  />
-                )}
-
-                {/* Additional Decision Findings if multiple exist */}
-                {result.flags.length > 1 && (
-                  <DecisionFlags
-                    flags={result.flags}
-                    selectedFlagId={selectedFlag?.flag_id ?? null}
-                    onSelectFlag={(flag) => {
-                      setSelectedFlag(flag);
-                      setTimeout(() => {
-                        const viewer = document.getElementById("document-evidence-viewer");
-                        if (viewer) {
-                          viewer.scrollIntoView({ behavior: "smooth", block: "start" });
-                        }
-                      }, 50);
-                    }}
-                  />
-                )}
-
-                {/* 7 & 9. Arithmetic Verification Summary & Expandable Technical Evidence */}
-                <MathVerification
-                  checks={result.validation_checks}
-                  currency={result.document?.currency}
-                  isQuotation={
-                    result.document?.document_type === "quotation" ||
-                    result.document?.document_type === "cost_breakdown" ||
-                    Boolean(result.document?.cost_breakdown && result.document.cost_breakdown.length > 0)
-                  }
-                  quotedTotal={
-                    result.document?.total_amount?.normalized_value != null
-                      ? Number(result.document.total_amount.normalized_value)
-                      : null
-                  }
-                  subtotal={
-                    result.document?.subtotal?.normalized_value != null
-                      ? Number(result.document.subtotal.normalized_value)
-                      : null
-                  }
-                  discountTotal={
-                    result.document?.discount_amount?.normalized_value != null
-                      ? Number(result.document.discount_amount.normalized_value)
-                      : null
-                  }
-                  onSelectFieldId={(fieldId) => {
-                    const comp = result.document?.cost_breakdown?.find(
-                      (c) => c.amount?.field_id === fieldId
-                    );
-                    if (comp?.amount?.provenance?.bounding_box) {
-                      setSelectedComponentId(comp.component_id);
-                      setSelectedFlag({
-                        flag_id: comp.component_id,
-                        claim_type: "requires_verification",
-                        label: comp.name,
-                        message: `${comp.name}: ${comp.amount.normalized_value}`,
-                        severity: "INFO",
-                        field_ids: [comp.amount.field_id],
-                        bounding_boxes: [comp.amount.provenance.bounding_box],
-                      });
-                      setTimeout(() => {
-                        const viewer = document.getElementById("document-evidence-viewer");
-                        if (viewer) {
-                          viewer.scrollIntoView({ behavior: "smooth", block: "start" });
-                        }
-                      }, 50);
-                      return;
-                    }
-                    const item = result.document?.line_items?.find(
-                      (li) => li.total_price?.field_id === fieldId || li.unit_price?.field_id === fieldId
-                    );
-                    const box = item?.total_price?.provenance?.bounding_box || item?.unit_price?.provenance?.bounding_box;
-                    if (box) {
-                      setSelectedFlag({
-                        flag_id: fieldId,
-                        claim_type: "requires_verification",
-                        label: item?.description?.normalized_value ? String(item.description.normalized_value) : fieldId,
-                        message: `Field ${fieldId}`,
-                        severity: "INFO",
-                        field_ids: [fieldId],
-                        bounding_boxes: [box],
-                      });
-                      setTimeout(() => {
-                        const viewer = document.getElementById("document-evidence-viewer");
-                        if (viewer) {
-                          viewer.scrollIntoView({ behavior: "smooth", block: "start" });
-                        }
-                      }, 50);
-                    }
-                  }}
+            {/* Decision Support Experience */}
+            {result.before_you_pay_summary ? (
+              <BeforeYouPayFinalSummaryView
+                summary={result.before_you_pay_summary}
+                result={result}
+                evidenceResult={result.evidence_first_result}
+                imagePreviewUrl={imagePreviewUrl}
+                documentText={documentText}
+                onReset={handleReset}
+                onAddSupportingDocument={handleAddSupportingDocument}
+                onSelectComponent={handleSelectComponent}
+                onSelectLineItem={handleSelectLineItem}
+                onInspectFieldId={handleInspectFieldId}
+              />
+            ) : (
+              <>
+                {/* Fallback for documents without before_you_pay_summary */}
+                <VerdictBanner
+                  result={result}
+                  onReset={handleReset}
+                  onSelectComponent={handleSelectComponent}
+                  onSelectLineItem={handleSelectLineItem}
+                  onAddSupportingDocument={handleAddSupportingDocument}
                 />
 
-                {/* Line items table for invoices/bills without cost breakdowns */}
-                {extractedItems.length > 0 && (!result?.document?.cost_breakdown || result.document.cost_breakdown.length === 0) && (
-                  <LineItemsTable items={extractedItems} currency={result?.document?.currency} />
-                )}
-              </div>
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                  <div className="lg:col-span-7 space-y-6">
+                    {result.document?.cost_breakdown && result.document.cost_breakdown.length > 0 ? (
+                      <CostBreakdownCard
+                        components={result.document.cost_breakdown}
+                        currency={result.document.currency}
+                        subtotal={
+                          result.document.subtotal?.normalized_value != null
+                            ? Number(result.document.subtotal.normalized_value)
+                            : null
+                        }
+                        discountTotal={
+                          result.document.discount_amount?.normalized_value != null
+                            ? Number(result.document.discount_amount.normalized_value)
+                            : null
+                        }
+                        quotedTotal={Number(result.document.total_amount?.normalized_value || 0)}
+                        validationChecks={result.validation_checks}
+                        selectedComponentId={selectedComponentId}
+                        onSelectComponent={handleSelectComponent}
+                      />
+                    ) : extractedItems.length > 0 ? (
+                      <LineItemsTable items={extractedItems} currency={result?.document?.currency} />
+                    ) : null}
 
-              {/* 8. Source Document Evidence Column (Mobile Viewport Responsive) */}
-              <div className="lg:col-span-5">
-                <DocumentViewer
-                  documentText={
-                    result?.raw_ocr_lines && result.raw_ocr_lines.length > 0
-                      ? result.raw_ocr_lines.join("\n")
-                      : documentText
-                  }
-                  ocrLines={result?.ocr_lines}
-                  selectedFlag={selectedFlag}
-                  imagePreviewUrl={imagePreviewUrl}
-                  onReturnToSummary={handleReturnToSummary}
-                />
-              </div>
-            </div>
+                    <WaysToReviewCostCard
+                      components={result.document?.cost_breakdown || []}
+                      lineItems={result.document?.line_items}
+                      extraCostAnalysis={result.extra_cost_analysis}
+                      costReductionSummary={result.cost_reduction_summary}
+                      smartQuestions={result.smart_questions}
+                      validationChecks={result.validation_checks}
+                      currency={result.document?.currency}
+                      onInspectEvidence={handleInspectFieldId}
+                    />
+
+                    <MathVerification
+                      checks={result.validation_checks}
+                      currency={result.document?.currency}
+                      isQuotation={
+                        result.document?.document_type === "quotation" ||
+                        result.document?.document_type === "cost_breakdown" ||
+                        Boolean(result.document?.cost_breakdown && result.document.cost_breakdown.length > 0)
+                      }
+                      quotedTotal={
+                        result.document?.total_amount?.normalized_value != null
+                          ? Number(result.document.total_amount.normalized_value)
+                          : null
+                      }
+                      subtotal={
+                        result.document?.subtotal?.normalized_value != null
+                          ? Number(result.document.subtotal.normalized_value)
+                          : null
+                      }
+                      discountTotal={
+                        result.document?.discount_amount?.normalized_value != null
+                          ? Number(result.document.discount_amount.normalized_value)
+                          : null
+                      }
+                      onSelectFieldId={handleInspectFieldId}
+                    />
+                  </div>
+
+                  <div className="lg:col-span-5 lg:sticky lg:top-20 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+                    <DocumentViewer
+                      documentText={
+                        result?.raw_ocr_lines && result.raw_ocr_lines.length > 0
+                          ? result.raw_ocr_lines.join("\n")
+                          : documentText
+                      }
+                      ocrLines={result?.ocr_lines}
+                      selectedFlag={selectedFlag}
+                      imagePreviewUrl={imagePreviewUrl}
+                      onReturnToSummary={handleReturnToSummary}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
       </main>
@@ -525,7 +645,7 @@ export default function Home() {
       />
 
       {/* Non-committal Legal Disclaimer */}
-      <footer className="mt-12 pt-6 border-t border-white/10 text-center text-[11px] text-slate-500 max-w-lg mx-auto px-4 leading-relaxed">
+      <footer className="mt-12 pt-6 pb-24 md:pb-12 border-t border-white/10 text-center text-[11px] text-slate-500 max-w-lg mx-auto px-4 leading-relaxed">
         <strong>Automated Decision Support:</strong> Uses spatial OCR geometry and deterministic Python arithmetic. Does not constitute formal legal or tax counsel. Final payment authorization rests with you.
       </footer>
     </div>

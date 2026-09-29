@@ -8,11 +8,9 @@ Covers:
 - Integration into ResultAggregatorService
 """
 
-import pytest
 from uuid import uuid4
 
 from before_you_pay.models.analysis import (
-    PlainLanguageExplanation,
     SmartCostReductionQuestion,
     ValidationCheck,
     ValidationSeverity,
@@ -77,15 +75,54 @@ class TestPlainLanguageExplanation:
         user_id = uuid4()
 
         comps = [
-            _make_component("Ex-showroom price", 1149900.0, ComponentCategory.EX_SHOWROOM_PRICE, OptionalityStatus.CONFIRMED_MANDATORY),
-            _make_component("Insurance", 34500.0, ComponentCategory.INSURANCE, OptionalityStatus.CONFIRMED_MANDATORY),
-            _make_component("Registration / R.C.", 76250.0, ComponentCategory.REGISTRATION, OptionalityStatus.CONFIRMED_MANDATORY),
-            _make_component("Warranty", 24000.0, ComponentCategory.WARRANTY, OptionalityStatus.POTENTIALLY_OPTIONAL),
-            _make_component("TCS", 11499.0, ComponentCategory.TCS, OptionalityStatus.CONFIRMED_MANDATORY),
-            _make_component("Temporary registration / HSRP", 2250.0, ComponentCategory.HSRP, OptionalityStatus.CONFIRMED_MANDATORY),
+            _make_component(
+                "Ex-showroom price",
+                1149900.0,
+                ComponentCategory.EX_SHOWROOM_PRICE,
+                OptionalityStatus.CONFIRMED_MANDATORY,
+            ),
+            _make_component(
+                "Insurance",
+                34500.0,
+                ComponentCategory.INSURANCE,
+                OptionalityStatus.CONFIRMED_MANDATORY,
+            ),
+            _make_component(
+                "Registration / R.C.",
+                76250.0,
+                ComponentCategory.REGISTRATION,
+                OptionalityStatus.CONFIRMED_MANDATORY,
+            ),
+            _make_component(
+                "Warranty",
+                24000.0,
+                ComponentCategory.WARRANTY,
+                OptionalityStatus.POTENTIALLY_OPTIONAL,
+            ),
+            _make_component(
+                "TCS", 11499.0, ComponentCategory.TCS, OptionalityStatus.CONFIRMED_MANDATORY
+            ),
+            _make_component(
+                "Temporary registration / HSRP",
+                2250.0,
+                ComponentCategory.HSRP,
+                OptionalityStatus.CONFIRMED_MANDATORY,
+            ),
             # Offers totaling ₹70,000
-            _make_component("Offer", 20000.0, ComponentCategory.OFFER, OptionalityStatus.CONFIRMED_OPTIONAL, nature=ChargeNature.DEDUCTION),
-            _make_component("Extra offer", 50000.0, ComponentCategory.OFFER, OptionalityStatus.CONFIRMED_OPTIONAL, nature=ChargeNature.DEDUCTION),
+            _make_component(
+                "Offer",
+                20000.0,
+                ComponentCategory.OFFER,
+                OptionalityStatus.CONFIRMED_OPTIONAL,
+                nature=ChargeNature.DEDUCTION,
+            ),
+            _make_component(
+                "Extra offer",
+                50000.0,
+                ComponentCategory.OFFER,
+                OptionalityStatus.CONFIRMED_OPTIONAL,
+                nature=ChargeNature.DEDUCTION,
+            ),
         ]
 
         doc = StructuredFinancialDocument(
@@ -141,13 +178,26 @@ class TestPlainLanguageExplanation:
             smart_questions=questions,
         )
 
-        assert "You're being quoted ₹12,28,399 for the vehicle." in explanation.quoted_amount_sentence
+        assert (
+            "You're being quoted ₹12,28,399 for the vehicle." in explanation.quoted_amount_sentence
+        )
         assert "₹11,49,900 is the ex-showroom price." in explanation.base_price_sentence
-        assert any("An additional ₹34,500 is listed for insurance." in s for s in explanation.charge_breakdown_sentences)
-        assert any("₹76,250 is listed for registration." in s for s in explanation.charge_breakdown_sentences)
-        assert any("₹24,000 is listed for warranty." in s for s in explanation.charge_breakdown_sentences)
+        assert any(
+            "An additional ₹34,500 is listed for insurance." in s
+            for s in explanation.charge_breakdown_sentences
+        )
+        assert any(
+            "₹76,250 is listed for registration." in s
+            for s in explanation.charge_breakdown_sentences
+        )
+        assert any(
+            "₹24,000 is listed for warranty." in s for s in explanation.charge_breakdown_sentences
+        )
         assert explanation.offers_sentence == "₹70,000 in offers reduce the stated subtotal."
-        assert explanation.discrepancy_sentence == "One ₹6 discrepancy exists between the listed charges and the stated subtotal."
+        assert (
+            explanation.discrepancy_sentence
+            == "One ₹6 discrepancy exists between the listed charges and the stated subtotal."
+        )
 
         assert explanation.clarification_heading == "Before paying, clarify these items:"
         assert len(explanation.clarification_items) >= 2
@@ -165,7 +215,12 @@ class TestPlainLanguageExplanation:
         user_id = uuid4()
 
         comps = [
-            _make_component("Handling Fee", 8500.0, ComponentCategory.HANDLING_FEE, OptionalityStatus.POTENTIALLY_OPTIONAL),
+            _make_component(
+                "Handling Fee",
+                8500.0,
+                ComponentCategory.HANDLING_FEE,
+                OptionalityStatus.POTENTIALLY_OPTIONAL,
+            ),
         ]
 
         doc = StructuredFinancialDocument(
@@ -254,6 +309,15 @@ class TestPlainLanguageExplanation:
         )
 
         assert result.plain_language_explanation is not None
-        assert "You're being quoted ₹8,25,000 for the vehicle." in result.plain_language_explanation.quoted_amount_sentence
-        assert "₹8,00,000 is the ex-showroom price." in result.plain_language_explanation.base_price_sentence
-        assert result.plain_language_explanation.clarification_heading == "Before paying, clarify these items:"
+        assert (
+            "You're being quoted ₹8,25,000 for the vehicle."
+            in result.plain_language_explanation.quoted_amount_sentence
+        )
+        assert (
+            "₹8,00,000 is the ex-showroom price."
+            in result.plain_language_explanation.base_price_sentence
+        )
+        assert (
+            result.plain_language_explanation.clarification_heading
+            == "Before paying, clarify these items:"
+        )

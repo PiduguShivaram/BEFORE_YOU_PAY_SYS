@@ -50,8 +50,6 @@ from before_you_pay.models.document import (
 )
 from before_you_pay.services.extra_cost_analysis import (
     ExtraCostAnalysisService,
-    ExtraCostFlag,
-    ExtraCostFlagType,
 )
 from before_you_pay.services.smart_questions import SmartCostReductionQuestionsService
 
@@ -125,7 +123,10 @@ class TestExtendedWarrantyQuestion:
         assert "optional" in q.question.lower()
 
         # 2. Reason
-        assert "lists warranty as a separate charge" in q.reason.lower() or "separate" in q.reason.lower()
+        assert (
+            "lists warranty as a separate charge" in q.reason.lower()
+            or "separate" in q.reason.lower()
+        )
 
         # 3. Related charge
         assert "warranty" in q.related_charge.lower()
@@ -166,7 +167,10 @@ class TestAccessoriesQuestion:
 
         assert "35,000" in q.question
         assert "included" in q.question.lower()
-        assert "remove individual" in q.question.lower() or "individual accessories" in q.question.lower()
+        assert (
+            "remove individual" in q.question.lower()
+            or "individual accessories" in q.question.lower()
+        )
         assert q.amount_involved == 35000.0
         assert "35,000" in q.potential_impact
 
@@ -192,8 +196,14 @@ class TestInsuranceQuestion:
         q = next(q for q in questions if "insurance" in q.question.lower())
 
         # Exact expected prompt phrasing
-        assert "mandatory from the dealer" in q.question.lower() or "choose another insurer" in q.question.lower()
-        assert "Is this insurance package mandatory from the dealer, or can I choose another insurer?" in q.question
+        assert (
+            "mandatory from the dealer" in q.question.lower()
+            or "choose another insurer" in q.question.lower()
+        )
+        assert (
+            "Is this insurance package mandatory from the dealer, or can I choose another insurer?"
+            in q.question
+        )
 
         # STRICT GUARDRAIL: Must NOT state the user has a legal right to choose another insurer
         assert "you have a legal right" not in q.reason.lower()
@@ -249,7 +259,11 @@ class TestDealerPackageQuestion:
         )
 
         assert len(questions) >= 1
-        q = next(q for q in questions if "dealer" in q.question.lower() or "package" in q.question.lower())
+        q = next(
+            q
+            for q in questions
+            if "dealer" in q.question.lower() or "package" in q.question.lower()
+        )
 
         assert "15,000" in q.question
         assert "included" in q.question.lower()
@@ -276,12 +290,18 @@ class TestDuplicateChargesQuestion:
             cost_breakdown=[comp1, comp2],
         )
 
-        dup_q = [q for q in questions if "separately" in q.question.lower() or "both" in q.question.lower()]
+        dup_q = [
+            q
+            for q in questions
+            if "separately" in q.question.lower() or "both" in q.question.lower()
+        ]
         assert len(dup_q) >= 1
         q = dup_q[0]
 
         assert "Basic Accessory Kit" in q.question or "Essential Accessories" in q.question
-        assert "charged separately" in q.question.lower() or "listed separately" in q.question.lower()
+        assert (
+            "charged separately" in q.question.lower() or "listed separately" in q.question.lower()
+        )
         assert q.amount_involved in (6000.0, 8500.0)
 
 
@@ -394,7 +414,9 @@ class TestRankingCriteria:
 
     def test_ranking_by_amount_and_impact(self) -> None:
         comp_small = _make_component("Small Fee", 500.0, ComponentCategory.OTHER_FEE)
-        comp_large = _make_component("Extended Warranty", 45000.0, ComponentCategory.EXTENDED_WARRANTY)
+        comp_large = _make_component(
+            "Extended Warranty", 45000.0, ComponentCategory.EXTENDED_WARRANTY
+        )
         comp_mid = _make_component("Accessories", 15000.0, ComponentCategory.ACCESSORY_PACKAGE)
 
         eca = ExtraCostAnalysisService.analyze([comp_small, comp_large, comp_mid])
@@ -409,7 +431,11 @@ class TestRankingCriteria:
         small_q = next(q for q in questions if "small fee" in q.question.lower())
 
         assert warranty_q.priority_score > small_q.priority_score
-        assert questions[0].priority_score >= questions[1].priority_score >= questions[2].priority_score
+        assert (
+            questions[0].priority_score
+            >= questions[1].priority_score
+            >= questions[2].priority_score
+        )
 
         # Verify transparent factors exist on each question
         for q in questions:
