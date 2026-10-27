@@ -104,7 +104,7 @@ $$\text{document\_id} \longrightarrow \text{page\_id} \longrightarrow \text{ocr\
 The project is structured into two clean layers:
 1. **Backend (FastAPI)**: Running on `http://127.0.0.1:8000`
 2. **Frontend (Next.js 14 App Router)**: Running on `http://localhost:3000`
-n
+
 ### Backend Setup & Tests
 ```bash
 # Sync Python dependencies
