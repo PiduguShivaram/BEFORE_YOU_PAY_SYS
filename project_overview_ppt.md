@@ -110,7 +110,7 @@ The project is structured into two clean layers:
 # Sync Python dependencies
 uv sync
 
-# Run backend unit & integration tests (655 tests across 30 test files)
+# Run backend unit & integration tests (693 tests passed across 36 test files)
 uv run pytest
 
 # Run linter and formatter
@@ -140,8 +140,8 @@ Open **`http://localhost:3000`** in your browser to view the interactive Next.js
 
 | Claim | Status | Evidence |
 | :--- | :--- | :--- |
-| 655 tests | **VERIFIED** | `pytest` output: 655 passed, 1 warning (deprecation warning about httpx with starlette TestClient) |
-| 30 test files | **VERIFIED** | Exactly 30 test files (`test_*.py`) in `tests/` directory |
+| 693 tests passed | **VERIFIED** | `pytest` output: 693 passed, 1 skipped, 1 warning across 36 test files |
+| 36 test files | **VERIFIED** | Exactly 36 test files (`test_*.py`) in `tests/` directory including Phase 1A, 1B, 1D, and regression suite |
 | SQLite RAG | **VERIFIED** | Deterministic SQLite-based token-overlap document retrieval with tenant isolation. The current retrieval system is lexical/token-overlap based and does not use neural semantic/vector embeddings. (`SqliteRagService` in `services/rag.py`). |
 | Non-committal by design | **VERIFIED** | Pydantic model validators in `models/analysis.py`, `models/decision_summary.py`, `models/evidence.py` |
 | Prohibited phrases enforced at model-validator level | **VERIFIED** | Runtime validators raise `ValueError` on prohibited recommendation language ("buy this", "guaranteed savings", "scam", "fraud", "safe to buy", etc.) across `ReasoningClaim`, `DecisionFlag`, `ResultSummary`, `SmartCostReductionQuestion`, `EvidenceItem`, `FindingExplanation`, `BeforeYouPayFinalDecisionSummary` |

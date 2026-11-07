@@ -95,6 +95,8 @@ $$\text{document\_id} \longrightarrow \text{page\_id} \longrightarrow \text{ocr\
 | :--- | :--- | :--- |
 | `GET` | `/health` | Liveness & readiness probes |
 | `POST` | `/api/v1/analyze` | Single-shot multi-part scan analysis (runs full 7-stage pipeline) |
+| `POST` | `/api/v1/compare-quotes` | N-way multi-quotation side-by-side comparison (2–5 quotes) |
+| `POST` | `/api/v1/parse-dealer-response` | Parse dealer WhatsApp/email counter-offers and reconcile arithmetic |
 | `POST` | `/api/v1/documents` | Index historical user contracts, warranties, or past quotes |
 
 ---
@@ -104,13 +106,13 @@ $$\text{document\_id} \longrightarrow \text{page\_id} \longrightarrow \text{ocr\
 The project is structured into two clean layers:
 1. **Backend (FastAPI)**: Running on `http://127.0.0.1:8000`
 2. **Frontend (Next.js 14 App Router)**: Running on `http://localhost:3000`
-n
+
 ### Backend Setup & Tests
 ```bash
 # Sync Python dependencies
 uv sync
 
-# Run backend unit & integration tests (36 tests)
+# Run backend unit & integration tests (693 tests passed across 36 test files)
 uv run pytest
 
 # Run linter and formatter
