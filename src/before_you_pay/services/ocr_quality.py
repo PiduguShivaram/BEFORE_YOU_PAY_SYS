@@ -363,13 +363,66 @@ class OCRQualityEvaluator:
                     # Note: OcrLine is frozen, but we preserve line classification in quality result
                     pass
 
+        # Check financial anchor presence
+        financial_anchors = [
+            tok
+            for tok in tokens
+            if tok.lower().strip(".,:;()[]\"'=-+~")
+            in {
+                "invoice",
+                "bill",
+                "billing",
+                "receipt",
+                "quotation",
+                "quote",
+                "total",
+                "subtotal",
+                "amount",
+                "tax",
+                "gst",
+                "cgst",
+                "sgst",
+                "vat",
+                "rate",
+                "price",
+                "mrp",
+                "discount",
+                "disc",
+                "charges",
+                "charge",
+                "fee",
+                "fees",
+                "due",
+                "paid",
+                "balance",
+                "rs",
+                "inr",
+                "usd",
+                "eur",
+                "gbp",
+                "item",
+                "items",
+                "qty",
+                "quantity",
+                "hsn",
+                "sac",
+                "statement",
+                "order",
+                "date",
+                "payment",
+            }
+            or re.search(r"[₹$€£¥]", tok)
+        ]
+
         # Decision Matrix
-        # 1. Extreme sparsity
-        if (character_count < 15 and word_count <= 2) or (
-            (character_count < 25 or word_count < 4) and vocabulary_ratio < 0.25
+        # 1. Extreme sparsity or noise lacking financial anchors
+        if (
+            ((character_count < 30 or word_count < 5) and len(financial_anchors) == 0)
+            or (character_count < 15 and word_count <= 2)
+            or ((character_count < 25 or word_count < 4) and vocabulary_ratio < 0.25)
         ):
             reasons.append(
-                f"Extracted text volume is too sparse ({character_count} chars, {word_count} tokens)."
+                f"Extracted text volume is too sparse ({character_count} chars, {word_count} tokens) or lacks financial anchor terminology."
             )
             return OCRQualityResult(
                 status=OCRQualityStatus.UNRELIABLE,

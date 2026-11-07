@@ -20,10 +20,25 @@ logger = logging.getLogger(__name__)
 class SpatialOcrEngine:
     """Production OCR engine producing normalized spatial lines and bounding boxes."""
 
-    def __init__(self, engine_name: str = "spatial_layout_ocr", version: str = "1.0.0") -> None:
+    def __init__(
+        self,
+        engine_name: str = "spatial_layout_ocr",
+        version: str = "1.0.0",
+        offline_only: bool | None = None,
+    ) -> None:
         self.engine_name = engine_name
         self.version = version
         self.quality_evaluator = OCRQualityEvaluator()
+        self._offline_only = offline_only
+
+    @property
+    def is_offline_only(self) -> bool:
+        """Check if local/offline execution is strictly enforced."""
+        if self._offline_only is not None:
+            return self._offline_only
+        from before_you_pay.config import get_settings
+
+        return get_settings().offline_only
 
     async def process_document(
         self,
@@ -108,18 +123,26 @@ class SpatialOcrEngine:
 
     @staticmethod
     def _has_meaningful_financial_content(res: OcrResult) -> bool:
-        """Check if recognized pages contain at least 4 digits representing financial figures."""
-        digit_count = 0
-        for p in res.pages:
-            for line in p.lines:
-                digit_count += sum(1 for c in line.text if c.isdigit())
-        return digit_count >= 4
+        """Check if recognized pages contain financial anchors and numeric figures."""
+        return SpatialOcrEngine._has_meaningful_financial_content_lines(
+            [line for p in res.pages for line in p.lines]
+        )
 
     @staticmethod
     def _has_meaningful_financial_content_lines(lines: list[OcrLine]) -> bool:
-        """Check if recognized lines contain at least 4 digits representing financial figures."""
+        """Check if recognized lines contain financial anchors and numeric figures."""
+        import re
+
+        full_text = " ".join(line.text for line in lines).lower()
         digit_count = sum(sum(1 for c in line.text if c.isdigit()) for line in lines)
-        return digit_count >= 4
+        has_currency = bool(re.search(r"[₹$€£¥]|rs\.?|inr|usd|eur|gbp", full_text))
+        has_financial_anchor = bool(
+            re.search(
+                r"\b(total|subtotal|amount|invoice|bill|receipt|quote|quotation|price|rate|mrp|discount|tax|gst|cgst|sgst|fee|charges|balance|due)\b",
+                full_text,
+            )
+        )
+        return (digit_count >= 3 and (has_currency or has_financial_anchor)) or (digit_count >= 8)
 
     async def _attempt_recovery_passes(
         self,
@@ -212,6 +235,10 @@ class SpatialOcrEngine:
                 pass
 
         # --- PASS 4: Multimodal Vision OCR (Cross-platform production engine) ---
+        if self.is_offline_only:
+            logger.info("OFFLINE_ONLY mode active: Cloud vision recovery pass bypassed.")
+            return best_result
+
         if (
             best_quality.status != OCRQualityStatus.GOOD
             or not self._has_meaningful_financial_content(best_result)
@@ -778,8 +805,8 @@ class SpatialOcrEngine:
 
         settings = get_settings()
 
-        # 1. Production Vision OCR (Primary path when API keys are configured, matches Linux/Cloud runtime)
-        if settings.gemini_api_keys:
+        # 1. Production Vision OCR (Primary path when API keys are configured and not in offline mode)
+        if not self.is_offline_only and settings.gemini_api_keys:
             try:
                 send_bytes = file_bytes
                 if img is not None:

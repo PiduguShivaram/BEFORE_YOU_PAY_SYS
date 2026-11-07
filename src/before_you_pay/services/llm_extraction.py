@@ -406,11 +406,40 @@ class HybridLlmExtractionEngine:
             raw_disc = item.get("discount")
             disc_val = float(raw_disc) if raw_disc is not None else None
 
+            matched_line = self._find_matching_line(desc, all_lines)
+
+            # Prevent OCR-extracted 0.00 tax column from being erroneously assigned as unit price
+            if rate <= 0.0 and item_tot > 0:
+                if matched_line:
+                    line_nums = [
+                        float(x.replace(",", ""))
+                        for x in re.findall(r"\b\d+(?:,\d+)*(?:\.\d+)?\b", matched_line.text)
+                    ]
+                    # Filter out qty, item_tot, mrp, and exact 0.0 (tax column)
+                    candidates = [
+                        n
+                        for n in line_nums
+                        if n > 0
+                        and n != item_tot
+                        and (mrp_val is None or n != mrp_val)
+                        and n != qty
+                    ]
+                    if candidates:
+                        # Prioritize printed unit price / rate column
+                        rate = candidates[0]
+                    elif mrp_val is not None and disc_val is not None and mrp_val > disc_val:
+                        rate = round(mrp_val - disc_val, 2)
+                    elif qty > 0:
+                        rate = round(item_tot / qty, 2)
+                elif mrp_val is not None and disc_val is not None and mrp_val > disc_val:
+                    rate = round(mrp_val - disc_val, 2)
+                elif qty > 0:
+                    rate = round(item_tot / qty, 2)
+
             # Reconcile MRP via standard accounting equation if omitted or obstructed in OCR
             if mrp_val is None and rate > 0 and disc_val is not None and disc_val > 0:
                 mrp_val = round(rate + disc_val, 2)
 
-            matched_line = self._find_matching_line(desc, all_lines)
             line_prov = FieldProvenance(
                 document_id=document_id,
                 page_id=matched_line.page_id if matched_line else first_page.page_id,
