@@ -14,19 +14,36 @@ import { OkfModal } from "../components/OkfModal";
 import { CostBreakdownCard } from "../components/CostBreakdownCard";
 import { WaysToReviewCostCard } from "../components/WaysToReviewCostCard";
 import { MobileFailureRecovery, MobileFailureState } from "../components/MobileFailureRecovery";
+import { MultiQuoteUploadDropzone } from "../components/MultiQuoteUploadDropzone";
+import { MultiQuoteComparisonCard } from "../components/MultiQuoteComparisonCard";
+import { DealerResponseParserCard } from "../components/DealerResponseParserCard";
 import {
   DecisionFlag,
   DocumentClassification,
   FinalDecisionSupportResult,
   FinancialComponent,
+  MultiQuoteComparisonResult,
+  DealerResponseAnalysisResult,
   OkfRule,
   RagRecord,
 } from "../lib/types";
 import { analyzeDocument, analyzeDocumentStream, checkBackendHealth, StreamEvent } from "../lib/api";
+import {
+  saveAnalysisToCache,
+  enqueueOfflineAudit,
+  CachedAnalysisRecord,
+} from "../lib/offlineStore";
 import { generateUUID } from "../lib/utils";
-import { Shield, Sparkles } from "lucide-react";
+import { Shield, Sparkles, Scale, FileSearch, MessageSquareQuote, Box } from "lucide-react";
+import { Spatial3DCanvas } from "../components/Spatial3DCanvas";
+import { Holographic3DScanner } from "../components/Holographic3DScanner";
+import { SpatialHUD3D } from "../components/SpatialHUD3D";
+import { Card3D } from "../components/Card3D";
+import { SpatialCursor3D } from "../components/SpatialCursor3D";
 
 export default function Home() {
+  const [spatialMode, setSpatialMode] = useState<"antigravity" | "cyber" | "minimal">("antigravity");
+  const [showHologram, setShowHologram] = useState<boolean>(true);
   const [userId, setUserId] = useState<string>("");
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean>(true);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -39,7 +56,12 @@ export default function Home() {
   const [selectedFlag, setSelectedFlag] = useState<DecisionFlag | null>(null);
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<MobileFailureState | null>(null);
+  const [appMode, setAppMode] = useState<"audit" | "compare" | "dealer_response">("audit");
+  const [multiQuoteResult, setMultiQuoteResult] = useState<MultiQuoteComparisonResult | null>(null);
+  const [cachedDealerResult, setCachedDealerResult] = useState<DealerResponseAnalysisResult | null>(null);
+  const [offlineRefreshTrigger, setOfflineRefreshTrigger] = useState<number>(0);
   const abortControllerRef = React.useRef<AbortController | null>(null);
+
 
   // Modals state
   const [isRagOpen, setIsRagOpen] = useState<boolean>(false);
@@ -210,11 +232,69 @@ export default function Home() {
       }
       if (!controller.signal.aborted) {
         setResult(data);
+        try {
+          await saveAnalysisToCache({
+            id: generateUUID(),
+            type: "single_analysis",
+            title: `Audit: ${file.name}`,
+            filename: file.name,
+            docType: docType,
+            timestamp: new Date().toISOString(),
+            currency: data.document?.currency || data.semantic_financial_structure?.currency || "INR",
+            totalAmount: Number(data.document?.total_amount?.normalized_value || data.semantic_financial_structure?.stated_total || 0),
+            statusVerdict: data.flags?.[0]?.severity || "COMPLETED",
+            discrepancyCount: data.flags?.length || 0,
+            resultPayload: data,
+          });
+          setOfflineRefreshTrigger((prev) => prev + 1);
+        } catch (cacheErr) {
+          console.warn("Could not save report to IndexedDB cache:", cacheErr);
+        }
       }
     } catch (err: any) {
       if (err?.name === "AbortError" || controller.signal.aborted) {
         return;
       }
+
+      // If user is offline or network error, save to local IndexedDB queue
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        const fileBlobs = [{ name: file.name, type: file.type, blob: file }];
+        if (supportingFile) {
+          fileBlobs.push({ name: supportingFile.name, type: supportingFile.type, blob: supportingFile });
+        }
+        try {
+          await enqueueOfflineAudit({
+            id: generateUUID(),
+            type: "single_analysis",
+            filename: file.name,
+            files: fileBlobs,
+            params: { userId, docType },
+            createdAt: new Date().toISOString(),
+            status: "pending",
+            retryCount: 0,
+          });
+          setOfflineRefreshTrigger((prev) => prev + 1);
+        } catch (queueErr) {
+          console.warn("Could not enqueue offline audit:", queueErr);
+        }
+
+        setAnalysisError({
+          title: "Offline Mode Active",
+          message:
+            "Device is currently offline. This document has been queued in your local IndexedDB and will automatically analyze as soon as connection is restored.",
+          onRetry: () => handleFileSelect(file, docType, supportingFile),
+          onRetake: () => {
+            setAnalysisError(null);
+            handleReset();
+          },
+          onChooseFile: () => {
+            setAnalysisError(null);
+            handleReset();
+          },
+        });
+        return;
+      }
+
       setAnalysisError({
         title: "Document Analysis Rejected",
         message:
@@ -306,6 +386,21 @@ export default function Home() {
     setStreamEvent(null);
     setAnalysisError(null);
     setIsProcessing(false);
+  };
+
+  const handleLoadCachedAnalysis = (record: CachedAnalysisRecord) => {
+    handleReset();
+    if (record.type === "single_analysis") {
+      setAppMode("audit");
+      setResult(record.resultPayload);
+      setPrimaryDocType(record.docType || "other");
+    } else if (record.type === "compare_quotes") {
+      setAppMode("compare");
+      setMultiQuoteResult(record.resultPayload);
+    } else if (record.type === "dealer_response") {
+      setAppMode("dealer_response");
+      setCachedDealerResult(record.resultPayload);
+    }
   };
 
   const handleSelectComponent = (comp: FinancialComponent) => {
@@ -463,7 +558,13 @@ export default function Home() {
   }, [result, documentText]);
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col pb-24 md:pb-16 selection:bg-brand-500/30">
+    <div className="relative min-h-screen bg-[#070b14] text-slate-100 flex flex-col pb-24 md:pb-16 selection:bg-brand-500/30 overflow-x-hidden">
+      {/* 3D Dynamic Spatial Canvas Background */}
+      <Spatial3DCanvas mode={spatialMode} />
+
+      {/* 3D Special Animated Cursor with Particle Wake */}
+      <SpatialCursor3D />
+
       {/* 1. Mobile Header & Application Identity */}
       <Navbar
         userId={userId}
@@ -476,22 +577,41 @@ export default function Home() {
           handleReset();
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
+        onLoadCachedAnalysis={handleLoadCachedAnalysis}
+        offlineRefreshTrigger={offlineRefreshTrigger}
       />
 
-      <main className="max-w-6xl mx-auto w-full px-3.5 sm:px-6 lg:px-8 space-y-5">
-        {/* Hero Section (Phone-First Headline) */}
+      <main className="relative z-10 max-w-6xl mx-auto w-full px-3.5 sm:px-6 lg:px-8 space-y-6">
+        {/* Hero Section (3D Hologram Stage & Headline) */}
         {!result && (
-          <div className="text-center max-w-xl mx-auto pt-2 pb-1 space-y-2">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-              <span>Strict Source Provenance • Deterministic Arithmetic</span>
+          <div className="space-y-4">
+            <div className="text-center max-w-2xl mx-auto pt-2 pb-1 space-y-2.5">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-lg shadow-cyan-500/10">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+                <span>3D Spatial Geometry • Deterministic Arithmetic Verification</span>
+              </div>
+              <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
+                Inspect Every Number in 3D Space Before You Pay
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-lg mx-auto">
+                Scan vehicle quotations, medical bills, or contracts. Explore hidden markups in 3D exploded layers, verify mathematical integrity, and protect your finances.
+              </p>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
-              What do you want to check before you pay?
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-md mx-auto">
-              Scan bills, vehicle quotations, warranties, or contracts. Verifies line-item math, reveals ancillary fees, and flags optional charges before you commit money.
-            </p>
+
+            {/* Interactive 3D Holographic Chamber (100% Real Rules & Deterministic Engine) */}
+            {showHologram && (
+              <div id="hologram-3d-stage" className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <Holographic3DScanner
+                  result={null}
+                  imagePreviewUrl={null}
+                  okfRules={okfRules}
+                  onTriggerUpload={() => {
+                    const el = document.getElementById("upload-dropzone-section");
+                    if (el) el.scrollIntoView({ behavior: "smooth" });
+                  }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -503,21 +623,142 @@ export default function Home() {
           />
         )}
 
-        {/* 2. Primary Scan Document Action / Upload Flow */}
-        {!result ? (
-          <>
-            <Dropzone
-              onFileSelect={handleFileSelect}
-              isProcessing={isProcessing}
-              selectedPrimaryFile={primaryFile}
-              onClearPrimaryFile={handleReset}
+        {/* Mode Selector Tabs (3D Spatial Navigation) */}
+        {!result && !multiQuoteResult && (
+          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1 pb-1">
+            <button
+              onClick={() => {
+                setAppMode("audit");
+                setCachedDealerResult(null);
+              }}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all transform hover:-translate-y-0.5 active:translate-y-0 ${
+                appMode === "audit"
+                  ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/50 shadow-lg shadow-cyan-500/20"
+                  : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
+              }`}
+            >
+              <FileSearch className="w-4 h-4 text-cyan-400" />
+              <span>Document Scan & Math Audit</span>
+            </button>
+            <button
+              onClick={() => {
+                setAppMode("compare");
+                setCachedDealerResult(null);
+              }}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all transform hover:-translate-y-0.5 active:translate-y-0 ${
+                appMode === "compare"
+                  ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/50 shadow-lg shadow-cyan-500/20"
+                  : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
+              }`}
+            >
+              <Scale className="w-4 h-4 text-blue-400" />
+              <span>Compare 2–5 Quotations Matrix</span>
+            </button>
+            <button
+              onClick={() => {
+                setAppMode("dealer_response");
+              }}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all transform hover:-translate-y-0.5 active:translate-y-0 ${
+                appMode === "dealer_response"
+                  ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/50 shadow-lg shadow-purple-500/20"
+                  : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
+              }`}
+            >
+              <MessageSquareQuote className="w-4 h-4 text-purple-400" />
+              <span>Dealer Counter-Offer Parser</span>
+            </button>
+          </div>
+        )}
+
+        {/* Multi-Quote Comparison Result Matrix */}
+        {multiQuoteResult ? (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            <MultiQuoteComparisonCard
+              comparison={multiQuoteResult}
+              onClose={() => setMultiQuoteResult(null)}
             />
-            <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
-          </>
+          </div>
+        ) : !result ? (
+          appMode === "dealer_response" ? (
+            <DealerResponseParserCard
+              userId={userId}
+              currency="INR"
+              initialResult={cachedDealerResult}
+              onParsed={async (parsed) => {
+                try {
+                  await saveAnalysisToCache({
+                    id: generateUUID(),
+                    type: "dealer_response",
+                    title: `Dealer Response Analysis`,
+                    filename: "Dealer Response",
+                    timestamp: new Date().toISOString(),
+                    currency: parsed.currency || "INR",
+                    totalAmount: parsed.calculated_new_total ?? parsed.stated_counter_total,
+                    statusVerdict: parsed.math_reconciliation_status,
+                    discrepancyCount: parsed.extracted_actions?.length || 0,
+                    resultPayload: parsed,
+                  });
+                  setOfflineRefreshTrigger((prev) => prev + 1);
+                } catch (err) {
+                  console.warn("Could not cache dealer response:", err);
+                }
+              }}
+            />
+          ) : appMode === "compare" ? (
+            <MultiQuoteUploadDropzone
+              userId={userId}
+              onComparisonComplete={async (comp) => {
+                setMultiQuoteResult(comp);
+                try {
+                  await saveAnalysisToCache({
+                    id: generateUUID(),
+                    type: "compare_quotes",
+                    title: `Comparison Matrix (${comp.quotes.length} Quotes)`,
+                    filename: comp.quotes.map((q) => q.filename || q.vendor_name || q.document_id).join(", "),
+                    timestamp: new Date().toISOString(),
+                    currency: comp.primary_currency,
+                    totalAmount: comp.min_total,
+                    statusVerdict: comp.currency_mismatch ? "CURRENCY_MISMATCH" : "COMPARED",
+                    discrepancyCount: comp.aligned_components?.length || 0,
+                    resultPayload: comp,
+                  });
+                  setOfflineRefreshTrigger((prev) => prev + 1);
+                } catch (err) {
+                  console.warn("Could not cache multi-quote result:", err);
+                }
+              }}
+            />
+          ) : (
+            <div id="upload-dropzone-section" className="scroll-mt-24 space-y-4">
+              <Dropzone
+                onFileSelect={handleFileSelect}
+                isProcessing={isProcessing}
+                selectedPrimaryFile={primaryFile}
+                onClearPrimaryFile={handleReset}
+              />
+              <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
+            </div>
+          )
         ) : (
+
+
           <div className="space-y-6 animate-in fade-in duration-300">
             {isProcessing && (
               <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
+            )}
+
+            {/* 3D Holographic Evidence Stage (100% Real Audited Document) */}
+            {showHologram && (
+              <div className="animate-in fade-in duration-300">
+                <Holographic3DScanner
+                  result={result}
+                  imagePreviewUrl={imagePreviewUrl}
+                  okfRules={okfRules}
+                  onSelectFlag={setSelectedFlag}
+                  onSelectComponent={handleSelectComponent}
+                  onTriggerUpload={handleReset}
+                />
+              </div>
             )}
 
             {/* Decision Support Experience */}
@@ -642,6 +883,14 @@ export default function Home() {
         isOpen={isOkfOpen}
         onClose={() => setIsOkfOpen(false)}
         rules={okfRules}
+      />
+
+      {/* 3D Interactive Spatial HUD Controller */}
+      <SpatialHUD3D
+        currentMode={spatialMode}
+        onChangeMode={setSpatialMode}
+        showHologram={showHologram}
+        onToggleHologram={() => setShowHologram((prev) => !prev)}
       />
 
       {/* Non-committal Legal Disclaimer */}

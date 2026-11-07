@@ -744,4 +744,108 @@ export interface EvidenceFirstResult {
   suggested_message_items: SuggestedMessageItem[];
 }
 
+// Phase 1A: Multi-Quote Comparison Types
+export interface QuoteSummary {
+  document_id: string;
+  vendor_name: string;
+  document_date?: string | null;
+  currency: string;
+  total_amount?: number | null;
+  item_count: number;
+  filename?: string | null;
+}
+
+export interface AlignedComponentCell {
+  document_id: string;
+  is_present: boolean;
+  raw_label?: string | null;
+  amount?: number | null;
+  amount_state: string;
+  is_included_in_total: boolean;
+  ocr_line_id?: string | null;
+  page_number?: number | null;
+  bounding_box?: BoundingBox | null;
+}
+
+export interface AlignedFinancialComponent {
+  alignment_id: string;
+  canonical_category: string;
+  display_name: string;
+  cells: Record<string, AlignedComponentCell>;
+  min_amount?: number | null;
+  max_amount?: number | null;
+  delta_amount?: number | null;
+  presence_variance: boolean;
+}
+
+export interface InclusionExclusionFinding {
+  finding_id: string;
+  component_category: string;
+  component_name: string;
+  description: string;
+  present_in_document_ids: string[];
+  absent_in_document_ids: string[];
+  potential_cost_difference?: number | null;
+}
+
+export interface MultiQuoteComparisonResult {
+  comparison_id: string;
+  user_id: string;
+  timestamp: string;
+  quotes: QuoteSummary[];
+  primary_currency: string;
+  currency_mismatch: boolean;
+  aligned_components: AlignedFinancialComponent[];
+  totals_by_document_id: Record<string, number | null>;
+  min_total?: number | null;
+  max_total?: number | null;
+  total_delta?: number | null;
+  inclusions_and_exclusions: InclusionExclusionFinding[];
+  suggested_negotiation_questions: string[];
+  summary_text: string;
+  disclaimer: string;
+}
+
+// Phase 1B: Dealer Response & Counter-Offer Types
+export type DealerActionType =
+  | "charge_waived"
+  | "price_reduced"
+  | "discount_added"
+  | "refused_non_negotiable"
+  | "counter_total_stated"
+  | "clarification_provided"
+  | "other";
+
+export interface ExtractedDealerAction {
+  action_id: string;
+  action_type: DealerActionType;
+  target_component_name: string;
+  raw_text_snippet: string;
+  original_amount?: number | null;
+  revised_amount?: number | null;
+  reduction_amount?: number | null;
+  is_confirmed: boolean;
+  notes?: string | null;
+}
+
+export interface DealerResponseAnalysisResult {
+  response_id: string;
+  user_id: string;
+  timestamp: string;
+  original_document_id?: string | null;
+  dealer_raw_text: string;
+  extracted_actions: ExtractedDealerAction[];
+  currency: string;
+  original_total?: number | null;
+  calculated_new_total?: number | null;
+  stated_counter_total?: number | null;
+  total_reduction?: number | null;
+  math_reconciliation_status: "RECONCILED" | "DISCREPANCY" | "INCOMPLETE_DATA";
+  reconciliation_difference?: number | null;
+  follow_up_recommendations: string[];
+  summary_text: string;
+  disclaimer: string;
+}
+
+
 

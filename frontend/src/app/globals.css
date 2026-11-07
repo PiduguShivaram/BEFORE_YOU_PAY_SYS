@@ -10,6 +10,8 @@
   --surface-inset: #090e1c;
   --border-card: rgba(255, 255, 255, 0.08);
   --border-subtle: rgba(255, 255, 255, 0.04);
+  --accent-cyan: #06b6d4;
+  --accent-indigo: #6366f1;
 }
 
 body {
@@ -23,14 +25,16 @@ body {
 /* ── 1. SURFACE UTILITIES (PRECISE, CALM FINTECH SURFACES) ── */
 .glass-panel,
 .surface-card {
-  background-color: rgba(13, 21, 39, 0.95);
+  background-color: rgba(13, 21, 39, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
 }
 
 .surface-subtle {
   background-color: rgba(16, 26, 48, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(8px);
 }
 
 .surface-inset {
@@ -39,20 +43,124 @@ body {
 }
 
 .glass-panel-hover {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .glass-panel-hover:hover {
   background-color: rgba(18, 30, 54, 0.98);
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.6), 0 0 25px -5px rgba(99, 102, 241, 0.25);
 }
 
-/* ── 2. TABULAR FINANCIAL NUMBERS ── */
+/* ── 2. 3D SPATIAL TRANSFORM UTILITIES (ANTIGRAVITY DESIGN) ── */
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.perspective-500 {
+  perspective: 500px;
+}
+
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.perspective-2000 {
+  perspective: 2000px;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+/* Depth Elevations along Z-axis */
+.translate-z-10 {
+  transform: translateZ(10px);
+}
+.translate-z-20 {
+  transform: translateZ(20px);
+}
+.translate-z-30 {
+  transform: translateZ(30px);
+}
+.translate-z-40 {
+  transform: translateZ(40px);
+}
+.translate-z-60 {
+  transform: translateZ(60px);
+}
+.translate-z-80 {
+  transform: translateZ(80px);
+}
+
+/* ── 3. SPATIAL & MOTION KEYFRAMES ── */
+@keyframes float3d {
+  0%, 100% {
+    transform: translateY(0px) rotateX(0deg) rotateY(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotateX(2deg) rotateY(-2deg);
+  }
+}
+
+.animate-float-3d {
+  animation: float3d 6s ease-in-out infinite;
+}
+
+@keyframes neonGlow3d {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(6, 182, 212, 0.2), 0 10px 30px rgba(0, 0, 0, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(6, 182, 212, 0.45), 0 20px 40px rgba(0, 0, 0, 0.7);
+  }
+}
+
+.animate-neon-glow-3d {
+  animation: neonGlow3d 3s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.4), 0 0 15px rgba(234, 179, 8, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(234, 179, 8, 0.6), 0 0 25px rgba(234, 179, 8, 0.4);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes scanSweep {
+  0% {
+    top: 0%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+.animate-scan-sweep {
+  animation: scanSweep 3.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* ── 4. TABULAR FINANCIAL NUMBERS ── */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
 
-/* ── 3. ACCESSIBLE KEYBOARD FOCUS ── */
+/* ── 5. ACCESSIBLE KEYBOARD FOCUS ── */
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -62,7 +170,7 @@ input:focus-visible,
   outline-offset: 2px;
 }
 
-/* ── 4. TOUCH TARGET MINIMUMS ── */
+/* ── 6. TOUCH TARGET MINIMUMS ── */
 .touch-target {
   min-height: 44px;
   min-width: 44px;
@@ -71,12 +179,12 @@ input:focus-visible,
   justify-content: center;
 }
 
-/* ── 5. SAFE AREA INSETS FOR MOBILE ── */
+/* ── 7. SAFE AREA INSETS FOR MOBILE ── */
 .safe-area-inset-bottom {
   padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
 }
 
-/* ── 5. CUSTOM SCROLLBAR ── */
+/* ── 8. CUSTOM SCROLLBAR ── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -92,3 +200,31 @@ input:focus-visible,
   background: rgba(255, 255, 255, 0.28);
 }
 
+/* ── 9. 3D SPECIAL CURSOR RETICLE STYLES ── */
+@keyframes spinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spinSlow 9s linear infinite;
+}
+
+/* Hide default cursor on desktop fine pointer devices when 3D spatial cursor is active */
+@media (pointer: fine) {
+  body,
+  button,
+  a,
+  input,
+  textarea,
+  select,
+  [role="button"],
+  [role="tab"],
+  .clickable {
+    cursor: none !important;
+  }
+}

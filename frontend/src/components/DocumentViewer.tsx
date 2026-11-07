@@ -261,16 +261,21 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 return (
                   <div
                     key={idx}
-                    className="absolute border-2 border-brand-400 bg-brand-500/30 rounded shadow-[0_0_12px_#818cf8] pointer-events-none animate-pulse z-20"
+                    className="absolute border-2 border-cyan-400 bg-cyan-500/25 rounded shadow-[0_0_16px_rgba(6,182,212,0.7)] pointer-events-none animate-pulse-glow z-20"
                     style={{ left, top, width, height }}
-                    title="Spatial OCR Bounding Box"
-                  />
+                    title="Spatial OCR Bounding Box Evidence"
+                  >
+                    <div className="absolute -top-6 left-0 bg-cyan-950/90 border border-cyan-400/50 text-cyan-300 text-[9px] font-mono px-1.5 py-0.2 rounded shadow-lg whitespace-nowrap">
+                      Source Evidence
+                    </div>
+                  </div>
                 );
               })}
             </div>
 
-            <p className="text-[10px] text-slate-400 text-center mt-3 font-sans">
-              Spatial bounding box indicates physical position parsed by vision OCR.
+            <p className="text-[10px] text-slate-400 text-center mt-3 font-sans flex items-center justify-center gap-1.5">
+              <Sparkles className="w-3 h-3 text-cyan-400" />
+              <span>Tap any finding or cost component to inspect its verified spatial position.</span>
             </p>
           </div>
         ) : totalCount === 0 ? (

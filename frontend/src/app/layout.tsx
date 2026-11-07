@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
+import { ServiceWorkerRegistration } from "../components/ServiceWorkerRegistration";
 import "./globals.css";
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -40,8 +41,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`dark overflow-x-hidden ${plusJakarta.variable} ${jetbrainsMono.variable}`}>
       <body className="antialiased selection:bg-brand-500/30 selection:text-brand-100 font-sans overflow-x-hidden w-full max-w-full bg-[#070b14] text-slate-100">
+        <ServiceWorkerRegistration />
         <div className="relative w-full overflow-x-hidden">{children}</div>
       </body>
     </html>
   );
 }
+

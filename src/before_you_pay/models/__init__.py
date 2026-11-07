@@ -32,6 +32,11 @@ from before_you_pay.models.cost_review import (
     CostReviewClassification,
     CostReviewQuestion,
 )
+from before_you_pay.models.dealer_response import (
+    DealerActionType,
+    DealerResponseAnalysisResult,
+    ExtractedDealerAction,
+)
 from before_you_pay.models.decision_summary import (
     AttentionItem,
     BeforeYouPayChecklist,
@@ -77,6 +82,13 @@ from before_you_pay.models.evidence import (
     QuestionProvenance,
     SuggestedMessageItem,
     SupportingDocumentExplanation,
+)
+from before_you_pay.models.multi_quote_comparison import (
+    AlignedComponentCell,
+    AlignedFinancialComponent,
+    InclusionExclusionFinding,
+    MultiQuoteComparisonResult,
+    QuoteSummary,
 )
 
 __all__ = [
@@ -152,4 +164,14 @@ __all__ = [
     "QuestionProvenance",
     "SuggestedMessageItem",
     "SupportingDocumentExplanation",
+    # Multi-Quote Comparison (Phase 1A)
+    "AlignedComponentCell",
+    "AlignedFinancialComponent",
+    "InclusionExclusionFinding",
+    "MultiQuoteComparisonResult",
+    "QuoteSummary",
+    # Dealer Response & Counter-Offer Parser (Phase 1B)
+    "DealerActionType",
+    "DealerResponseAnalysisResult",
+    "ExtractedDealerAction",
 ]

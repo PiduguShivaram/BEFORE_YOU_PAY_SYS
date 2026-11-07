@@ -15,6 +15,7 @@ import {
 import { DocumentClassification } from "../lib/types";
 import { CameraCaptureModal } from "./CameraCaptureModal";
 import { CaptureGuidance } from "./CaptureGuidance";
+import { Card3D } from "./Card3D";
 
 interface DropzoneProps {
   onFileSelect: (
@@ -123,7 +124,8 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   };
 
   return (
-    <div className="surface-card rounded-2xl p-4 sm:p-7 shadow-card mb-6 border border-white/10 space-y-4">
+    <Card3D intensity={7} glare={true} depth={20} className="mb-6">
+      <div className="surface-card rounded-2xl p-4 sm:p-7 shadow-card border border-white/10 space-y-4">
       {/* Target Document Category Selector */}
       <div className="space-y-1.5 pb-3 border-b border-white/10">
         <div className="flex items-center justify-between">
@@ -327,6 +329,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
         onCapture={handleCameraCapture}
         onFallbackToFileInput={() => cameraInputRef.current?.click()}
       />
-    </div>
+      </div>
+    </Card3D>
   );
 };

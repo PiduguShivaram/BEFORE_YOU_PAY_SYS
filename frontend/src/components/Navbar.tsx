@@ -11,6 +11,7 @@ import {
   Scan,
   X,
 } from "lucide-react";
+import { OfflineSyncIndicator } from "./OfflineSyncIndicator";
 
 interface NavbarProps {
   userId: string;
@@ -20,6 +21,8 @@ interface NavbarProps {
   onOpenOkf: () => void;
   isBackendHealthy: boolean;
   onTriggerScan?: () => void;
+  onLoadCachedAnalysis?: (record: any) => void;
+  offlineRefreshTrigger?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -30,6 +33,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenOkf,
   isBackendHealthy,
   onTriggerScan,
+  onLoadCachedAnalysis,
+  offlineRefreshTrigger,
 }) => {
   const [isEditingUser, setIsEditingUser] = useState(false);
   const [tempUserId, setTempUserId] = useState(userId);
@@ -48,28 +53,34 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Top Header: Responsive for both mobile and desktop */}
       <header className="sticky top-0 z-40 w-full bg-slate-950/85 backdrop-blur-md border-b border-white/10 py-3 sm:py-4 px-4 sm:px-6 mb-6">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
-          {/* Brand Identity */}
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-700 flex items-center justify-center text-white shadow-glow shrink-0">
-              <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5" />
+          {/* Brand Identity with 3D Spatial Badge */}
+          <div className="flex items-center gap-2.5 group cursor-pointer" onClick={onTriggerScan}>
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-cyan-500 via-indigo-600 to-purple-700 flex items-center justify-center text-white shadow-lg shadow-cyan-500/30 shrink-0 transform group-hover:rotate-6 group-hover:scale-110 transition-all duration-300">
+              <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-1.5 sm:gap-2">
-                <span className="font-extrabold text-sm sm:text-base tracking-tight bg-gradient-to-b from-white to-slate-200 bg-clip-text text-transparent">
+                <span className="font-extrabold text-sm sm:text-base tracking-tight bg-gradient-to-r from-white via-cyan-200 to-indigo-200 bg-clip-text text-transparent">
                   Before You Pay
                 </span>
-                <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400 border border-brand-500/20">
-                  Decision Support
+                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-sm shadow-cyan-500/20">
+                  3D Spatial
                 </span>
               </div>
               <p className="text-[10px] sm:text-xs text-slate-400 leading-none mt-0.5 hidden xs:block">
-                Mobile Financial Document Auditor
+                Spatial Financial Document Auditor
               </p>
             </div>
           </div>
 
           {/* Right Header Elements */}
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Offline Sync & Cached Audits Indicator */}
+            <OfflineSyncIndicator
+              onLoadCachedAnalysis={onLoadCachedAnalysis}
+              refreshTrigger={offlineRefreshTrigger}
+            />
+
             {/* API Health Indicator */}
             <div
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] sm:text-xs font-medium border ${

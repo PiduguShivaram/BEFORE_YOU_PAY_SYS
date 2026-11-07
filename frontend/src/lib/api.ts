@@ -172,3 +172,71 @@ export async function checkBackendHealth(): Promise<{ status: string; app_name: 
   }
   return res.json();
 }
+
+export async function compareQuotes(
+  files: File[],
+  userId: string,
+  signal?: AbortSignal
+): Promise<import("./types").MultiQuoteComparisonResult> {
+  const formData = new FormData();
+  for (const f of files) {
+    formData.append("files", f);
+  }
+  formData.append("user_id", userId);
+
+  const res = await fetch(`${API_BASE}/api/v1/compare-quotes`, {
+    method: "POST",
+    body: formData,
+    signal,
+  });
+
+  if (!res.ok) {
+    let errorDetail = "Failed to compare quotations";
+    try {
+      const err = await res.json();
+      errorDetail = err.message || err.detail || errorDetail;
+    } catch {}
+    throw new Error(errorDetail);
+  }
+
+  return res.json();
+}
+
+export async function parseDealerResponse(
+  dealerText: string,
+  userId: string,
+  originalTotal?: number | null,
+  currency: string = "INR",
+  quoteFile?: File | null,
+  signal?: AbortSignal
+): Promise<import("./types").DealerResponseAnalysisResult> {
+  const formData = new FormData();
+  formData.append("dealer_text", dealerText);
+  formData.append("user_id", userId);
+  if (originalTotal != null) {
+    formData.append("original_total", String(originalTotal));
+  }
+  formData.append("currency", currency);
+  if (quoteFile) {
+    formData.append("quote_file", quoteFile);
+  }
+
+  const res = await fetch(`${API_BASE}/api/v1/parse-dealer-response`, {
+    method: "POST",
+    body: formData,
+    signal,
+  });
+
+  if (!res.ok) {
+    let errorDetail = "Failed to parse dealer response";
+    try {
+      const err = await res.json();
+      errorDetail = err.message || err.detail || errorDetail;
+    } catch {}
+    throw new Error(errorDetail);
+  }
+
+  return res.json();
+}
+
+

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
 
     # OCR Engine Config
     ocr_engine: str = "spatial_layout_ocr"
+    offline_only: bool = Field(
+        default=False,
+        description="Strict local/offline mode preventing remote cloud vision/LLM API calls.",
+    )
 
     # User Document RAG Store Config
     rag_default_top_k: int = 5
