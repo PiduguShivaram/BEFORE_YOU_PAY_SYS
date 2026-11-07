@@ -345,7 +345,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                         <div className="mt-0.5 text-[10px] text-slate-400 flex items-center gap-1">
                           <span className="text-[9px] uppercase font-bold text-slate-500">Raw:</span>
                           <span className="font-mono text-slate-400 bg-white/5 px-1 rounded">
-                            "{line.raw_text}"
+                            &ldquo;{line.raw_text}&rdquo;
                           </span>
                         </div>
                       )}

@@ -410,17 +410,40 @@ class OCRQualityEvaluator:
                 "order",
                 "date",
                 "payment",
+                "toll",
+                "fare",
+                "parking",
+                "fuel",
+                "petrol",
+                "diesel",
+                "cng",
+                "rent",
+                "fine",
+                "challan",
+                "slip",
+                "token",
+                "cost",
+                "net",
+                "gross",
             }
             or re.search(r"[₹$€£¥]", tok)
         ]
 
+        has_financial_anchors = len(financial_anchors) > 0
+
         # Decision Matrix
         # 1. Extreme sparsity or noise lacking financial anchors
-        if (
-            ((character_count < 30 or word_count < 5) and len(financial_anchors) == 0)
-            or (character_count < 15 and word_count <= 2)
-            or ((character_count < 25 or word_count < 4) and vocabulary_ratio < 0.25)
-        ):
+        # Pure noise (e.g. "~~~ !!! ???", isolated symbols) or short sparse text lacking any financial keywords/amounts
+        is_pure_noise = alnum_chars < 3 or (character_count < 15 and alphanumeric_ratio < 0.40)
+        is_sparse_lacking_anchors = (
+            (character_count < 30 or word_count < 4) and not has_financial_anchors
+        ) or (
+            not has_financial_anchors
+            and (character_count < 25 or word_count < 4)
+            and vocabulary_ratio < 0.25
+        )
+
+        if is_pure_noise or is_sparse_lacking_anchors:
             reasons.append(
                 f"Extracted text volume is too sparse ({character_count} chars, {word_count} tokens) or lacks financial anchor terminology."
             )

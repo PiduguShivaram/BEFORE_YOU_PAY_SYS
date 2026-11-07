@@ -58,6 +58,35 @@ export function OfflineSyncIndicator({
     }
   }, []);
 
+  const handleSyncAll = useCallback(async () => {
+    if (!navigator.onLine || isSyncing) return;
+    setIsSyncing(true);
+    setSyncStatusMsg("Processing offline queue...");
+
+    try {
+      const { processed, failed } = await processOfflineQueue(
+        (item, status, result) => {
+          if (status === "completed" && result && onLoadCachedAnalysis) {
+            // Optionally notify
+          }
+        }
+      );
+      await loadData();
+      if (failed > 0) {
+        setSyncStatusMsg(`Sync completed: ${processed} synced, ${failed} failed.`);
+      } else if (processed > 0) {
+        setSyncStatusMsg(`Successfully synced ${processed} item(s)!`);
+      } else {
+        setSyncStatusMsg("Queue is up to date.");
+      }
+    } catch (e: any) {
+      setSyncStatusMsg(`Sync error: ${e?.message || "Network error"}`);
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncStatusMsg(null), 4000);
+    }
+  }, [isSyncing, loadData, onLoadCachedAnalysis]);
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       setIsOnline(navigator.onLine);
@@ -89,40 +118,11 @@ export function OfflineSyncIndicator({
         clearInterval(interval);
       };
     }
-  }, [loadData]);
+  }, [loadData, handleSyncAll]);
 
   useEffect(() => {
     loadData();
   }, [refreshTrigger, loadData]);
-
-  const handleSyncAll = async () => {
-    if (!navigator.onLine || isSyncing) return;
-    setIsSyncing(true);
-    setSyncStatusMsg("Processing offline queue...");
-
-    try {
-      const { processed, failed } = await processOfflineQueue(
-        (item, status, result) => {
-          if (status === "completed" && result && onLoadCachedAnalysis) {
-            // Optionally notify
-          }
-        }
-      );
-      await loadData();
-      if (failed > 0) {
-        setSyncStatusMsg(`Sync completed: ${processed} synced, ${failed} failed.`);
-      } else if (processed > 0) {
-        setSyncStatusMsg(`Successfully synced ${processed} item(s)!`);
-      } else {
-        setSyncStatusMsg("Queue is up to date.");
-      }
-    } catch (e: any) {
-      setSyncStatusMsg(`Sync error: ${e?.message || "Network error"}`);
-    } finally {
-      setIsSyncing(false);
-      setTimeout(() => setSyncStatusMsg(null), 4000);
-    }
-  };
 
   const handleRemoveQueueItem = async (id: string) => {
     await removeOfflineQueueItem(id);

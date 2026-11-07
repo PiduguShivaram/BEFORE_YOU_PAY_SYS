@@ -138,11 +138,11 @@ class SpatialOcrEngine:
         has_currency = bool(re.search(r"[₹$€£¥]|rs\.?|inr|usd|eur|gbp", full_text))
         has_financial_anchor = bool(
             re.search(
-                r"\b(total|subtotal|amount|invoice|bill|receipt|quote|quotation|price|rate|mrp|discount|tax|gst|cgst|sgst|fee|charges|balance|due)\b",
+                r"\b(total|subtotal|amount|invoice|bill|receipt|quote|quotation|price|rate|mrp|discount|tax|gst|cgst|sgst|fee|charges|balance|due|toll|fare|parking|fuel|petrol|diesel|cng|rent|slip|token|cost)\b",
                 full_text,
             )
         )
-        return (digit_count >= 3 and (has_currency or has_financial_anchor)) or (digit_count >= 8)
+        return (digit_count >= 1 and (has_currency or has_financial_anchor)) or (digit_count >= 6)
 
     async def _attempt_recovery_passes(
         self,

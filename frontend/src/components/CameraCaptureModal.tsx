@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Camera, RotateCcw, Check, X, AlertTriangle, RefreshCw } from "lucide-react";
 
 interface CameraCaptureModalProps {
@@ -25,20 +25,20 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isStartingStream, setIsStartingStream] = useState<boolean>(false);
 
-  const stopStream = () => {
+  const stopStream = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-  };
+  }, []);
 
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     setCameraError(null);
     setCapturedBlob(null);
-    if (capturedUrl) {
-      URL.revokeObjectURL(capturedUrl);
-      setCapturedUrl(null);
-    }
+    setCapturedUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     setIsStartingStream(true);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -74,24 +74,24 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     } finally {
       setIsStartingStream(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
       startCamera();
     } else {
       stopStream();
-      if (capturedUrl) {
-        URL.revokeObjectURL(capturedUrl);
-        setCapturedUrl(null);
-      }
+      setCapturedUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
       setCapturedBlob(null);
       setCameraError(null);
     }
     return () => {
       stopStream();
     };
-  }, [isOpen]);
+  }, [isOpen, startCamera, stopStream]);
 
   const handleCaptureFrame = () => {
     if (!videoRef.current || !canvasRef.current) return;

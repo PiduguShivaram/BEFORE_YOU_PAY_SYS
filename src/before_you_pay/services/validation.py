@@ -268,6 +268,7 @@ class DeterministicValidationEngine:
                         float(c.amount.normalized_value)
                         for c in charges
                         if c.amount_state != AmountState.NOT_APPLICABLE
+                        and c.amount.normalized_value is not None
                     ),
                     2,
                 )
@@ -314,6 +315,7 @@ class DeterministicValidationEngine:
                     float(c.amount.normalized_value)
                     for c in charges
                     if c.amount_state != AmountState.NOT_APPLICABLE
+                    and c.amount.normalized_value is not None
                 ),
                 2,
             )
@@ -351,6 +353,7 @@ class DeterministicValidationEngine:
                         float(c.amount.normalized_value)
                         for c in deductions
                         if c.amount_state != AmountState.NOT_APPLICABLE
+                        and c.amount.normalized_value is not None
                     ),
                     2,
                 )
@@ -499,10 +502,17 @@ class DeterministicValidationEngine:
                         c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
                     )
                 ]
-                sum_charges = round(sum(float(c.amount.normalized_value) for c in charges), 2)
+                sum_charges = round(
+                    sum(
+                        float(c.amount.normalized_value)
+                        for c in charges
+                        if c.amount.normalized_value is not None
+                    ),
+                    2,
+                )
                 stated_sub = (
                     round(float(document.subtotal.normalized_value), 2)
-                    if document.subtotal
+                    if (document.subtotal and document.subtotal.normalized_value is not None)
                     else sum_charges
                 )
                 delta = round(abs(sum_charges - stated_sub), 2)
@@ -606,6 +616,7 @@ class DeterministicValidationEngine:
                     if getattr(
                         c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE
                     )
+                    and c.amount.normalized_value is not None
                 ),
                 2,
             )
@@ -627,6 +638,7 @@ class DeterministicValidationEngine:
                 if getattr(
                     c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
                 )
+                and c.amount.normalized_value is not None
             )
             if ded_sum > 0:
                 discount_val = ded_sum

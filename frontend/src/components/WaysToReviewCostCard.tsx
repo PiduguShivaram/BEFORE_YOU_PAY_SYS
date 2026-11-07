@@ -738,7 +738,7 @@ export const WaysToReviewCostCard: React.FC<WaysToReviewCostCardProps> = ({
                     Question to ask seller
                   </span>
                   <p className="text-xs sm:text-sm font-medium text-white italic">
-                    "{item.questionToAsk}"
+                    &ldquo;{item.questionToAsk}&rdquo;
                   </p>
                   {item.suggestedAction && (
                     <div className="flex items-center gap-1.5 text-[11px] text-brand-300 font-medium pt-0.5">

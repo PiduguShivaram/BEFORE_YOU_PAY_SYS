@@ -16,6 +16,7 @@ from before_you_pay.core.dates import (
     verify_date_grounding,
 )
 from before_you_pay.models import (
+    AmountState,
     BoundingBox,
     ChargeNature,
     ComponentCategory,
@@ -259,6 +260,27 @@ class HybridLlmExtractionEngine:
         response_content, key_used = self.key_manager.execute_with_failover(call_fn)
 
         parsed = json.loads(response_content)
+        doc = self._build_extracted_document_from_json(
+            document_id=document_id,
+            user_id=user_id,
+            ocr_result=ocr_result,
+            parsed=parsed,
+            document_type_hint=document_type_hint,
+        )
+        return doc, key_used
+
+    def _build_extracted_document_from_json(
+        self,
+        document_id: UUID,
+        user_id: UUID,
+        ocr_result: OcrResult,
+        parsed: dict[str, Any],
+        document_type_hint: DocumentClassification | None = None,
+    ) -> StructuredFinancialDocument:
+        all_lines: list[OcrLine] = []
+        for page in ocr_result.pages:
+            all_lines.extend(page.lines)
+
         first_page = ocr_result.pages[0]
         default_line_ids = [first_page.lines[0].line_id] if first_page.lines else [uuid4()]
         default_bbox = (
@@ -399,8 +421,16 @@ class HybridLlmExtractionEngine:
                 .rstrip("()-: ")
             )
             qty = float(item.get("quantity") or 1.0)
-            rate = float(item.get("unit_price") or 0.0)
-            item_tot = float(item.get("total_price") or (qty * rate))
+            raw_rate = item.get("unit_price")
+            rate = (
+                float(raw_rate) if (raw_rate is not None and str(raw_rate).strip() != "") else None
+            )
+            raw_tot = item.get("total_price")
+            item_tot = (
+                float(raw_tot)
+                if (raw_tot is not None and str(raw_tot).strip() != "")
+                else (qty * rate if rate is not None else 0.0)
+            )
             raw_mrp = item.get("mrp")
             mrp_val = float(raw_mrp) if raw_mrp is not None else None
             raw_disc = item.get("discount")
@@ -409,7 +439,7 @@ class HybridLlmExtractionEngine:
             matched_line = self._find_matching_line(desc, all_lines)
 
             # Prevent OCR-extracted 0.00 tax column from being erroneously assigned as unit price
-            if rate <= 0.0 and item_tot > 0:
+            if (rate is None or rate <= 0.0) and item_tot > 0:
                 if matched_line:
                     line_nums = [
                         float(x.replace(",", ""))
@@ -429,15 +459,21 @@ class HybridLlmExtractionEngine:
                         rate = candidates[0]
                     elif mrp_val is not None and disc_val is not None and mrp_val > disc_val:
                         rate = round(mrp_val - disc_val, 2)
-                    elif qty > 0:
+                    elif qty > 0 and raw_rate is not None:
                         rate = round(item_tot / qty, 2)
                 elif mrp_val is not None and disc_val is not None and mrp_val > disc_val:
                     rate = round(mrp_val - disc_val, 2)
-                elif qty > 0:
+                elif qty > 0 and raw_rate is not None:
                     rate = round(item_tot / qty, 2)
 
             # Reconcile MRP via standard accounting equation if omitted or obstructed in OCR
-            if mrp_val is None and rate > 0 and disc_val is not None and disc_val > 0:
+            if (
+                mrp_val is None
+                and rate is not None
+                and rate > 0
+                and disc_val is not None
+                and disc_val > 0
+            ):
                 mrp_val = round(rate + disc_val, 2)
 
             line_prov = FieldProvenance(
@@ -470,6 +506,16 @@ class HybridLlmExtractionEngine:
                 )
                 item_discounts.append(disc_field)
 
+            unit_price_field = None
+            if rate is not None and rate > 0:
+                unit_price_field = ExtractedField(
+                    field_key=f"line_item_{idx}_rate",
+                    normalized_value=rate,
+                    unit_or_currency=currency,
+                    confidence=0.90,
+                    provenance=line_prov,
+                )
+
             line_items.append(
                 LineItem(
                     description=ExtractedField(
@@ -484,13 +530,7 @@ class HybridLlmExtractionEngine:
                         confidence=0.90,
                         provenance=line_prov,
                     ),
-                    unit_price=ExtractedField(
-                        field_key=f"line_item_{idx}_rate",
-                        normalized_value=rate,
-                        unit_or_currency=currency,
-                        confidence=0.90,
-                        provenance=line_prov,
-                    ),
+                    unit_price=unit_price_field,
                     total_price=ExtractedField(
                         field_key=f"line_item_{idx}_total",
                         normalized_value=item_tot,
@@ -509,7 +549,13 @@ class HybridLlmExtractionEngine:
         cost_breakdown: list[FinancialComponent] = []
         for c_idx, comp in enumerate(raw_components):
             raw_comp_name = str(comp.get("name") or "").strip()
-            comp_amt = float(comp.get("amount") or 0.0)
+            raw_amt = comp.get("amount")
+            if raw_amt is not None and str(raw_amt).strip() != "":
+                comp_amt = float(raw_amt)
+                comp_amt_state = AmountState.ZERO if comp_amt == 0.0 else AmountState.PRESENT
+            else:
+                comp_amt = 0.0
+                comp_amt_state = AmountState.MISSING
 
             # Match provenance line
             matched_comp_line = (
@@ -595,6 +641,7 @@ class HybridLlmExtractionEngine:
                     raw_label=comp_name,
                     normalized_label=comp.get("normalized_label") or comp.get("normalized_name"),
                     amount=amt_field,
+                    amount_state=comp_amt_state,
                     category=comp_cat,
                     charge_nature=comp_nature,
                     is_optional=is_optional,
@@ -1015,7 +1062,7 @@ class HybridLlmExtractionEngine:
             total_amount=total_field,
             clauses_and_notes=extracted_clauses,
         )
-        return doc, key_used
+        return doc
 
     def _find_matching_line(self, target_text: str, lines: list[OcrLine]) -> OcrLine | None:
         """Find the OCR line that most closely contains or matches the target text."""

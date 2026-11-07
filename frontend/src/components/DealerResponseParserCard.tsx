@@ -271,7 +271,7 @@ export function DealerResponseParserCard({
                     )}
                   </div>
                   <div className="text-slate-400 text-[11px] bg-slate-900/60 px-2.5 py-1 rounded border border-slate-800/80 font-mono">
-                    "{action.raw_text_snippet}"
+                    &ldquo;{action.raw_text_snippet}&rdquo;
                   </div>
                   {action.notes && (
                     <div className="text-slate-300 text-[11px]">{action.notes}</div>
