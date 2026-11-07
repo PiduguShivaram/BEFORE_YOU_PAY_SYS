@@ -1544,10 +1544,17 @@ class FinancialExtractionEngine:
                                 nums[-1],
                             )
                         elif nums[0] <= 10 and nums[1] > 20:
-                            # Row format with 5 numbers: [qty, mrp, rate, tax, amt] where discount column is omitted
                             qty_val = nums[0]
-                            mrp, rate, tax, amt = nums[1], nums[2], nums[3], nums[4]
-                            disc = None
+                            mrp_cand = nums[1]
+                            middle_cand = nums[2]
+                            tax = nums[3]
+                            amt = nums[4]
+                            if mrp_cand > amt and middle_cand <= (mrp_cand - amt):
+                                mrp = mrp_cand
+                                disc = middle_cand
+                                rate = round(amt + disc, 2)
+                            else:
+                                mrp, rate, disc = mrp_cand, middle_cand, None
                         else:
                             mrp, rate, disc, tax, amt = (
                                 nums[-5],

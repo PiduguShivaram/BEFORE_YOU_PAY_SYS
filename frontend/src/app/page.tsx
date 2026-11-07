@@ -40,6 +40,9 @@ import { Holographic3DScanner } from "../components/Holographic3DScanner";
 import { SpatialHUD3D } from "../components/SpatialHUD3D";
 import { Card3D } from "../components/Card3D";
 import { SpatialCursor3D } from "../components/SpatialCursor3D";
+import { OnDeviceAnalysisCard } from "../components/OnDeviceAnalysisCard";
+import { runOnDeviceOfflineAnalysis } from "../lib/offlineOcrWorker";
+import { OfflineAnalysisResult } from "../lib/offlineAnalysisEngine";
 
 export default function Home() {
   const [spatialMode, setSpatialMode] = useState<"antigravity" | "cyber" | "minimal">("antigravity");
@@ -60,6 +63,8 @@ export default function Home() {
   const [multiQuoteResult, setMultiQuoteResult] = useState<MultiQuoteComparisonResult | null>(null);
   const [cachedDealerResult, setCachedDealerResult] = useState<DealerResponseAnalysisResult | null>(null);
   const [offlineRefreshTrigger, setOfflineRefreshTrigger] = useState<number>(0);
+  const [onDeviceResult, setOnDeviceResult] = useState<OfflineAnalysisResult | null>(null);
+  const [isOnDeviceRunning, setIsOnDeviceRunning] = useState<boolean>(false);
   const abortControllerRef = React.useRef<AbortController | null>(null);
 
 
@@ -256,13 +261,27 @@ export default function Home() {
         return;
       }
 
-      // If user is offline or network error, save to local IndexedDB queue
+      // If user is offline or network error, execute genuine on-device WebWorker analysis and queue in local IndexedDB
       if (typeof navigator !== "undefined" && !navigator.onLine) {
-        const fileBlobs = [{ name: file.name, type: file.type, blob: file }];
-        if (supportingFile) {
-          fileBlobs.push({ name: supportingFile.name, type: supportingFile.type, blob: supportingFile });
-        }
+        setIsProcessing(false);
+        setIsOnDeviceRunning(true);
         try {
+          const offlineRes = await runOnDeviceOfflineAnalysis(file, (pct, statusText) => {
+            setStreamEvent({
+              stage: "spatial_ocr",
+              status: "processing",
+              progress: pct,
+              message: statusText,
+            });
+          });
+          setOnDeviceResult(offlineRes);
+          setIsOnDeviceRunning(false);
+          setStreamEvent(null);
+
+          const fileBlobs = [{ name: file.name, type: file.type, blob: file }];
+          if (supportingFile) {
+            fileBlobs.push({ name: supportingFile.name, type: supportingFile.type, blob: supportingFile });
+          }
           await enqueueOfflineAudit({
             id: generateUUID(),
             type: "single_analysis",
@@ -274,8 +293,11 @@ export default function Home() {
             retryCount: 0,
           });
           setOfflineRefreshTrigger((prev) => prev + 1);
+          return;
         } catch (queueErr) {
-          console.warn("Could not enqueue offline audit:", queueErr);
+          console.warn("Could not complete offline on-device analysis:", queueErr);
+          setIsOnDeviceRunning(false);
+          setStreamEvent(null);
         }
 
         setAnalysisError({
@@ -386,6 +408,8 @@ export default function Home() {
     setStreamEvent(null);
     setAnalysisError(null);
     setIsProcessing(false);
+    setOnDeviceResult(null);
+    setIsOnDeviceRunning(false);
   };
 
   const handleLoadCachedAnalysis = (record: CachedAnalysisRecord) => {
@@ -620,6 +644,18 @@ export default function Home() {
           <MobileFailureRecovery
             error={analysisError}
             onDismiss={() => setAnalysisError(null)}
+          />
+        )}
+
+        {/* On-Device Offline Verification HUD Card */}
+        {onDeviceResult && (
+          <OnDeviceAnalysisCard
+            result={onDeviceResult}
+            onQueueForCloud={() => {
+              if (primaryFile) {
+                handleFileSelect(primaryFile, primaryDocType);
+              }
+            }}
           />
         )}
 

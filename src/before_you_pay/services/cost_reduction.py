@@ -214,10 +214,18 @@ class PotentialCostReductionService:
         is_range_valid = max_reduction > min_reduction
         if is_range_valid:
             range_display = f"₹{min_reduction:,.0f}–₹{max_reduction:,.0f}"
+            review_msg = cls.STANDARD_REVIEW_MESSAGE
         elif max_reduction > 0:
             range_display = f"₹{max_reduction:,.0f}"
+            review_msg = cls.STANDARD_REVIEW_MESSAGE
         else:
             range_display = "₹0"
+            if not charges:
+                review_msg = (
+                    "No itemized charges detected in this document to review for optionality."
+                )
+            else:
+                review_msg = "All reviewed charges appear mandatory or statutory based on available evidence."
 
         return PotentialCostReductionSummary(
             confirmed_optional_amount=confirmed_amt,
@@ -229,7 +237,7 @@ class PotentialCostReductionService:
             min_potential_reduction=min_reduction,
             max_potential_reduction=max_reduction,
             potential_range_display=range_display,
-            review_message=cls.STANDARD_REVIEW_MESSAGE,
+            review_message=review_msg,
             is_range_valid=is_range_valid,
             total_charges_reviewed=len(charges),
         )

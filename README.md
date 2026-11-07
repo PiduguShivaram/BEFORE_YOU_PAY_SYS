@@ -112,7 +112,7 @@ The project is structured into two clean layers:
 # Sync Python dependencies
 uv sync
 
-# Run backend unit & integration tests (701 tests passed across 37 test files)
+# Run backend unit & integration tests (711 tests passed across 38 test files, 0 skipped)
 uv run pytest -q
 
 # Run linter and formatter
@@ -140,7 +140,7 @@ npm run lint
 # Build optimized production bundle
 npm run build
 
-# Run Headless Chrome Browser E2E Test Suite (10/10 passed)
+# Run Headless Chrome Browser E2E Test Suite (13/13 passed)
 node scripts/run_browser_e2e.mjs
 
 # Start Next.js development server
@@ -155,4 +155,5 @@ Open **`http://localhost:3000`** in your browser to view the interactive Next.js
 Before You Pay enforces a strict zero-fake-data policy across all financial pipelines:
 - **No Mock Quotations in Production:** Every financial component originates directly from verified user documents or deterministic mathematical calculation.
 - **Traceable Financial Metrics:** Missing items or unstated rates remain explicitly `None` or `AmountState.MISSING` (rendered as `"—"`), never fabricated as ₹0.
-- **Verified Offline Capability:** Local camera capture and IndexedDB review operate fully offline, while deep OCR and LLM reasoning are truthfully queued for server execution upon reconnection.
+- **True On-Device Offline Capability:** Client WebWorker OCR (`tesseract.js`) and pure deterministic arithmetic verification execute 100% locally on-device without network access, while deep 7-stage cloud reasoning is truthfully queued in IndexedDB for automatic synchronization upon reconnection.
+- **Layered Security & Multi-User Isolation:** IDOR prevention with strict `X-User-ID` tenant boundary enforcement and multi-pattern adversarial prompt injection screening.

@@ -746,7 +746,8 @@ class HybridLlmExtractionEngine:
             discount_field = self.fallback_engine._extract_discount(document_id, all_lines)
 
         # Deterministic reconciliation of unallocated invoice discount across line items:
-        # If invoice specifies a total discount amount, but one line item's discount was missed/set to 0 by OCR column misalignment
+        # If invoice specifies a total discount amount, but one line item's discount was missed/set to 0 by OCR column misalignment,
+        # reconcile the difference while clearly marking provenance as a calculated/reconciled discount rather than printed text.
         if discount_field and float(discount_field.normalized_value or 0.0) > 0:
             tot_inv_disc = float(discount_field.normalized_value)
             explicit_item_disc_sum = sum(
@@ -763,12 +764,20 @@ class HybridLlmExtractionEngine:
                 ]
                 if len(zero_disc_items) == 1:
                     target_li = zero_disc_items[0]
+                    # Clearly distinguish calculated derivation in provenance text
+                    reconciled_prov = FieldProvenance(
+                        document_id=target_li.description.provenance.document_id,
+                        page_id=target_li.description.provenance.page_id,
+                        ocr_line_ids=target_li.description.provenance.ocr_line_ids,
+                        bounding_box=target_li.description.provenance.bounding_box,
+                        raw_text=f"[Reconciled from unallocated invoice discount: {unallocated_disc:,.2f}]",
+                    )
                     reconciled_disc_field = ExtractedField(
                         field_key=f"{target_li.description.field_key.replace('_desc', '')}_discount",
                         normalized_value=unallocated_disc,
                         unit_or_currency=currency,
                         confidence=0.90,
-                        provenance=target_li.description.provenance,
+                        provenance=reconciled_prov,
                     )
                     target_idx = line_items.index(target_li)
                     reconciled_li = target_li.model_copy(
@@ -921,12 +930,24 @@ class HybridLlmExtractionEngine:
         if (
             subtotal_field is None or float(subtotal_field.normalized_value or 0.0) == 0.0
         ) and cost_breakdown:
-            charges_sum = sum(
-                float(c.amount.normalized_value or 0.0)
+            charge_comps = [
+                c
                 for c in cost_breakdown
                 if getattr(c.charge_nature, "is_additive", c.charge_nature == ChargeNature.CHARGE)
+            ]
+            charges_sum = sum(
+                float(c.amount.normalized_value or 0.0)
+                for c in charge_comps
+                if c.amount and c.amount.normalized_value is not None
             )
             if charges_sum > 0:
+                charge_line_ids = []
+                for c in charge_comps:
+                    if c.amount and c.amount.provenance and c.amount.provenance.ocr_line_ids:
+                        charge_line_ids.extend(c.amount.provenance.ocr_line_ids)
+                if not charge_line_ids:
+                    charge_line_ids = default_line_ids
+
                 subtotal_field = ExtractedField(
                     field_key="subtotal",
                     normalized_value=round(charges_sum, 2),
@@ -935,23 +956,35 @@ class HybridLlmExtractionEngine:
                     provenance=FieldProvenance(
                         document_id=document_id,
                         page_id=first_page.page_id,
-                        ocr_line_ids=default_line_ids,
+                        ocr_line_ids=charge_line_ids,
                         bounding_box=default_bbox,
-                        raw_text=f"Subtotal Before Offers: {charges_sum}",
+                        raw_text=f"[Derived sum of itemized charges before offers: {charges_sum:,.2f}]",
                     ),
                 )
 
         if (
             discount_field is None or float(discount_field.normalized_value or 0.0) == 0.0
         ) and cost_breakdown:
-            deductions_sum = sum(
-                float(c.amount.normalized_value or 0.0)
+            deduction_comps = [
+                c
                 for c in cost_breakdown
                 if getattr(
                     c.charge_nature, "is_deduction", c.charge_nature == ChargeNature.DEDUCTION
                 )
+            ]
+            deductions_sum = sum(
+                float(c.amount.normalized_value or 0.0)
+                for c in deduction_comps
+                if c.amount and c.amount.normalized_value is not None
             )
             if deductions_sum > 0:
+                ded_line_ids = []
+                for c in deduction_comps:
+                    if c.amount and c.amount.provenance and c.amount.provenance.ocr_line_ids:
+                        ded_line_ids.extend(c.amount.provenance.ocr_line_ids)
+                if not ded_line_ids:
+                    ded_line_ids = default_line_ids
+
                 discount_field = ExtractedField(
                     field_key="discount_amount",
                     normalized_value=round(deductions_sum, 2),
@@ -960,9 +993,9 @@ class HybridLlmExtractionEngine:
                     provenance=FieldProvenance(
                         document_id=document_id,
                         page_id=first_page.page_id,
-                        ocr_line_ids=default_line_ids,
+                        ocr_line_ids=ded_line_ids,
                         bounding_box=default_bbox,
-                        raw_text=f"Total Offers: {deductions_sum}",
+                        raw_text=f"[Derived sum of itemized offers: {deductions_sum:,.2f}]",
                     ),
                 )
 

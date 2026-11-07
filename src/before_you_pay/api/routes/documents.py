@@ -2,7 +2,7 @@
 
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from before_you_pay.api.deps import get_pipeline_service
@@ -63,3 +63,35 @@ async def store_user_document(
         document_id=request.document_id,
         chunks_indexed=count,
     )
+
+
+@router.get(
+    "/{document_id}",
+    response_model=list[RagEvidenceChunk],
+    summary="Get user's historical document chunks",
+    description="Retrieve indexed chunks for a document, strictly enforcing tenant isolation and IDOR protection.",
+)
+async def get_user_document(
+    document_id: UUID,
+    x_user_id: UUID = Header(..., alias="X-User-ID", description="Authenticated user tenant ID"),
+    pipeline: PipelineService = Depends(get_pipeline_service),
+) -> list[RagEvidenceChunk]:
+    """Retrieve document chunks with strict ownership check."""
+    chunks = await pipeline.rag_service.get_document_chunks(
+        user_id=x_user_id, document_id=document_id
+    )
+    if not chunks:
+        # Check if the document exists under another user to catch IDOR attempts
+        exists_elsewhere = await pipeline.rag_service.document_exists_any_user(
+            document_id=document_id
+        )
+        if exists_elsewhere:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You do not have permission to access this document.",
+            )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document '{document_id}' not found.",
+        )
+    return chunks

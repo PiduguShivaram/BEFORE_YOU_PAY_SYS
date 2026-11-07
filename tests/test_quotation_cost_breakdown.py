@@ -1,6 +1,6 @@
 """Tests for generic financial component models and vehicle quotation cost breakdowns."""
 
-import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -359,9 +359,15 @@ class TestQuotationCostBreakdown:
 @pytest.mark.anyio
 async def test_real_handwritten_image_e2e_reconciliation():
     """Verify end-to-end processing and reconciliation on user's real handwritten quote image."""
-    image_path = r"C:\Users\shiva\Downloads\WhatsApp Image 2026-09-24 at 1.11.24 PM.jpeg"
-    if not os.path.exists(image_path):
-        pytest.skip(f"Test image not found at {image_path}")
+    asset_path = Path(__file__).parent / "assets" / "handwritten-vehicle-quotation.jpeg"
+    fallback_path = Path(r"C:\Users\shiva\Downloads\WhatsApp Image 2026-09-24 at 1.11.24 PM.jpeg")
+
+    if asset_path.exists():
+        image_path = str(asset_path)
+    elif fallback_path.exists():
+        image_path = str(fallback_path)
+    else:
+        pytest.skip(f"Test image not found at {asset_path} or {fallback_path}")
 
     with open(image_path, "rb") as f:
         file_bytes = f.read()

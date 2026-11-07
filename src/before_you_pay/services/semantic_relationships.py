@@ -229,14 +229,37 @@ class SemanticRelationshipService:
 
         calc_total = round(additive_sum - deductive_sum, 2)
         discrepancy = round(abs(calc_total - stated_total), 2) if stated_total is not None else None
-        is_reconciled = discrepancy is not None and discrepancy <= 0.02
+
+        # Priority 1: Zero fake financial data hardening
+        # Reconciled can ONLY be True if:
+        # 1. Stated total exists and discrepancy <= 0.02
+        # 2. No components have missing, unknown, or unreadable amounts
+        unreadable_components = [
+            comp
+            for comp in document.cost_breakdown
+            if getattr(comp, "amount_state", None)
+            in (AmountState.MISSING, AmountState.UNKNOWN, AmountState.UNREADABLE)
+            or comp.amount is None
+            or not isinstance(getattr(comp.amount, "normalized_value", None), (int, float))
+        ]
+
+        if unreadable_components:
+            is_reconciled = False
+        else:
+            is_reconciled = discrepancy is not None and discrepancy <= 0.02
 
         # Format clean canonical formula representation
         add_expr = " + ".join(dict.fromkeys(formula_parts_add)) or "CHARGES"
         ded_expr = f" - {' - '.join(dict.fromkeys(formula_parts_ded))}" if formula_parts_ded else ""
         formula_rep = f"{add_expr}{ded_expr} = QUOTED_TOTAL"
 
-        if is_reconciled:
+        if unreadable_components:
+            explanation = (
+                f"Reconciliation inconclusive: Breakdown contains {len(unreadable_components)} component(s) "
+                f"with missing, unreadable, or unverified amounts ({unreadable_components[0].name}). "
+                "Mathematical balance cannot be verified."
+            )
+        elif is_reconciled:
             explanation = (
                 f"Quoted total ({currency} {stated_total:,.2f}) perfectly reconciles with constituent "
                 f"breakdown charges ({currency} {additive_sum:,.2f}) minus deductions ({currency} {deductive_sum:,.2f})."
@@ -247,7 +270,10 @@ class SemanticRelationshipService:
                 f"({currency} {calc_total:,.2f}) does not equal stated total ({currency} {stated_total:,.2f})."
             )
         else:
-            explanation = f"Calculated total from breakdown charges: {currency} {calc_total:,.2f}."
+            explanation = (
+                f"Calculated total from breakdown charges: {currency} {calc_total:,.2f} "
+                "(stated total was not detected in document)."
+            )
 
         return SemanticFinancialStructure(
             formula_type=SemanticFormulaType.VEHICLE_QUOTATION_BREAKDOWN,
@@ -389,8 +415,15 @@ class SemanticRelationshipService:
 
         calc_total = round(calc_total, 2)
         discrepancy = round(abs(calc_total - stated_total), 2) if stated_total is not None else None
-        is_reconciled = discrepancy is not None and discrepancy <= 0.02
+        is_reconciled = discrepancy is not None and discrepancy <= 0.02 and stated_total is not None
         formula_rep = f"{' + '.join(formula_parts) or 'SUBTOTAL'}{ded_str} = TOTAL"
+
+        if stated_total is None:
+            explanation = f"Calculated subtotal and charges: {currency} {calc_total:,.2f} (stated total was not detected)."
+        elif is_reconciled:
+            explanation = f"Standard invoice reconciliation: Reconciles perfectly with stated total ({currency} {stated_total:,.2f})."
+        else:
+            explanation = f"Discrepancy of {currency} {discrepancy:,.2f} detected between calculated components ({currency} {calc_total:,.2f}) and stated total ({currency} {stated_total:,.2f})."
 
         return SemanticFinancialStructure(
             formula_type=SemanticFormulaType.COMMERCE_INVOICE,
@@ -401,9 +434,7 @@ class SemanticRelationshipService:
             discrepancy=discrepancy,
             is_reconciled=is_reconciled,
             currency=currency,
-            summary_explanation=(
-                f"Standard invoice reconciliation: {'Reconciles' if is_reconciled else 'Discrepancy detected'}."
-            ),
+            summary_explanation=explanation,
         )
 
     @classmethod
@@ -416,12 +447,15 @@ class SemanticRelationshipService:
         """Analyze itemized catalog / line item invoice."""
         relations: list[SemanticComponentRelation] = []
         items_sum = 0.0
+        has_unpriced_items = False
 
         for it in document.line_items:
             amt_val = None
             if it.total_price and isinstance(it.total_price.normalized_value, (int, float)):
                 amt_val = float(it.total_price.normalized_value)
                 items_sum += amt_val
+            else:
+                has_unpriced_items = True
 
             desc = (
                 it.description.provenance.raw_text
@@ -445,7 +479,21 @@ class SemanticRelationshipService:
 
         items_sum = round(items_sum, 2)
         discrepancy = round(abs(items_sum - stated_total), 2) if stated_total is not None else None
-        is_reconciled = discrepancy is not None and discrepancy <= 0.02
+
+        # If any item has unstated price, reconciliation cannot be confirmed
+        if has_unpriced_items or stated_total is None:
+            is_reconciled = False
+        else:
+            is_reconciled = discrepancy is not None and discrepancy <= 0.02
+
+        if has_unpriced_items:
+            explanation = f"Itemized lines sum: {currency} {items_sum:,.2f} (some line items lack stated prices; reconciliation inconclusive)."
+        elif stated_total is None:
+            explanation = f"Itemized line items total: {currency} {items_sum:,.2f} (stated total was not detected in document)."
+        elif is_reconciled:
+            explanation = f"Itemized line items perfectly reconcile: {currency} {items_sum:,.2f} equals stated total."
+        else:
+            explanation = f"Line items discrepancy of {currency} {discrepancy:,.2f}: Sum ({currency} {items_sum:,.2f}) differs from stated total ({currency} {stated_total:,.2f})."
 
         return SemanticFinancialStructure(
             formula_type=SemanticFormulaType.ITEMIZED_BILL,
@@ -456,7 +504,7 @@ class SemanticRelationshipService:
             discrepancy=discrepancy,
             is_reconciled=is_reconciled,
             currency=currency,
-            summary_explanation=f"Itemized line items total: {currency} {items_sum:,.2f}.",
+            summary_explanation=explanation,
         )
 
     @classmethod
@@ -467,6 +515,19 @@ class SemanticRelationshipService:
         currency: str,
     ) -> SemanticFinancialStructure:
         """Analyze simple receipt with single financial amount."""
+        if stated_total is None:
+            return SemanticFinancialStructure(
+                formula_type=SemanticFormulaType.SIMPLE_RECEIPT,
+                formula_representation="TOTAL = UNKNOWN",
+                relations=[],
+                calculated_sum=None,
+                stated_total=None,
+                discrepancy=None,
+                is_reconciled=False,
+                currency=currency,
+                summary_explanation="Total amount not detected or unreadable in document.",
+            )
+
         return SemanticFinancialStructure(
             formula_type=SemanticFormulaType.SIMPLE_RECEIPT,
             formula_representation="TOTAL = TOTAL",
@@ -476,5 +537,5 @@ class SemanticRelationshipService:
             discrepancy=0.0,
             is_reconciled=True,
             currency=currency,
-            summary_explanation=f"Simple total: {currency} {stated_total or 0.0:,.2f}.",
+            summary_explanation=f"Single total stated: {currency} {stated_total:,.2f}.",
         )

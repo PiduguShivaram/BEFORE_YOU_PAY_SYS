@@ -22,6 +22,7 @@ from before_you_pay.models.dealer_response import (
     ExtractedDealerAction,
 )
 from before_you_pay.models.document import StructuredFinancialDocument
+from before_you_pay.services.security import SecurityService
 
 
 def _parse_amount(text: str) -> float | None:
@@ -49,7 +50,10 @@ class DealerResponseParserService:
         if not dealer_text or not dealer_text.strip():
             raise ValueError("Dealer response text cannot be empty.")
 
-        text_lower = dealer_text.lower()
+        # Security audit: inspect for adversarial prompt injection vectors
+        sec_audit = SecurityService.audit_text_for_prompt_injection(dealer_text)
+        safe_dealer_text = sec_audit.sanitized_text or dealer_text
+        text_lower = safe_dealer_text.lower()
         extracted_actions: list[ExtractedDealerAction] = []
 
         # 1. Resolve Original Total and Document Context
@@ -245,10 +249,10 @@ class DealerResponseParserService:
                 else:
                     recon_status = "DISCREPANCY"
             else:
-                recon_status = "RECONCILED"
+                recon_status = "INCOMPLETE_DATA"
         elif stated_counter_total is not None:
             calc_new_tot = stated_counter_total
-            recon_status = "RECONCILED"
+            recon_status = "INCOMPLETE_DATA"
 
         # 8. Actionable Follow-up Verification Questions
         follow_ups: list[str] = [
@@ -277,6 +281,11 @@ class DealerResponseParserService:
         ):
             follow_ups.append(
                 f"Clarify the {curr} {reconciliation_diff:,.2f} variance between the stated final total ({curr} {stated_counter_total:,.2f}) and the sum of itemized concessions ({curr} {calc_new_tot:,.2f})."
+            )
+
+        if sec_audit.is_suspicious:
+            follow_ups.append(
+                f"Security notice: Adversarial instructions detected in text ({sec_audit.remediation_note}). Concessions evaluated strictly through deterministic math rules."
             )
 
         # 9. Neutral Summary Text

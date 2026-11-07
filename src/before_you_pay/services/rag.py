@@ -181,3 +181,48 @@ class SqliteRagService:
         # Sort by similarity descending
         scored_chunks.sort(key=lambda x: x[0], reverse=True)
         return [chunk for _, chunk in scored_chunks[: query.top_k]]
+
+    async def get_document_chunks(
+        self,
+        user_id: UUID,
+        document_id: UUID,
+    ) -> list[RagEvidenceChunk]:
+        """Fetch indexed chunks strictly owned by user_id."""
+        sql = "SELECT * FROM user_chunks WHERE user_id = ? AND source_document_id = ? ORDER BY page_number ASC"
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (str(user_id), str(document_id))).fetchall()
+
+        chunks: list[RagEvidenceChunk] = []
+        for row in rows:
+            bounding_box = None
+            if row["box_x"] is not None:
+                bounding_box = BoundingBox(
+                    x=row["box_x"],
+                    y=row["box_y"],
+                    width=row["box_w"],
+                    height=row["box_h"],
+                    coordinate_unit=CoordinateUnit.NORMALIZED_PERCENTAGE,
+                )
+            chunks.append(
+                RagEvidenceChunk(
+                    evidence_id=UUID(row["evidence_id"]),
+                    user_id=user_id,
+                    source_document_id=document_id,
+                    source_document_type=DocumentClassification(row["source_document_type"]),
+                    page_number=row["page_number"],
+                    source_text=row["source_text"],
+                    bounding_box=bounding_box,
+                    similarity_score=1.0,
+                )
+            )
+        return chunks
+
+    async def document_exists_any_user(
+        self,
+        document_id: UUID,
+    ) -> bool:
+        """Check if document exists under any user (used for IDOR protection)."""
+        sql = "SELECT 1 FROM user_chunks WHERE source_document_id = ? LIMIT 1"
+        with self._get_connection() as conn:
+            row = conn.execute(sql, (str(document_id),)).fetchone()
+        return row is not None
