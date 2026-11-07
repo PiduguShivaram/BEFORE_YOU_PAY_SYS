@@ -112,8 +112,8 @@ The project is structured into two clean layers:
 # Sync Python dependencies
 uv sync
 
-# Run backend unit & integration tests (693 tests passed across 36 test files)
-uv run pytest
+# Run backend unit & integration tests (701 tests passed across 37 test files)
+uv run pytest -q
 
 # Run linter and formatter
 uv run ruff check .
@@ -123,7 +123,7 @@ uv run ruff format --check .
 uv run uvicorn before_you_pay.main:app --host 127.0.0.1 --port 8000
 ```
 
-### Frontend Setup & Dev Server (Next.js)
+### Frontend Setup, Quality Gates & Dev Server (Next.js)
 ```bash
 # Navigate to frontend directory
 cd frontend
@@ -131,7 +131,28 @@ cd frontend
 # Install Node dependencies with pnpm
 pnpm install
 
+# Run TypeScript standalone typecheck
+npm run typecheck
+
+# Run ESLint (Next.js Core Web Vitals)
+npm run lint
+
+# Build optimized production bundle
+npm run build
+
+# Run Headless Chrome Browser E2E Test Suite (10/10 passed)
+node scripts/run_browser_e2e.mjs
+
 # Start Next.js development server
 pnpm dev
 ```
 Open **`http://localhost:3000`** in your browser to view the interactive Next.js application. All `/api` and `/health` requests are seamlessly proxied to the FastAPI backend.
+
+---
+
+## 7. Zero Fake Data Policy & Verification
+
+Before You Pay enforces a strict zero-fake-data policy across all financial pipelines:
+- **No Mock Quotations in Production:** Every financial component originates directly from verified user documents or deterministic mathematical calculation.
+- **Traceable Financial Metrics:** Missing items or unstated rates remain explicitly `None` or `AmountState.MISSING` (rendered as `"—"`), never fabricated as ₹0.
+- **Verified Offline Capability:** Local camera capture and IndexedDB review operate fully offline, while deep OCR and LLM reasoning are truthfully queued for server execution upon reconnection.
