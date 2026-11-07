@@ -22,6 +22,7 @@ interface NavbarProps {
   isBackendHealthy: boolean;
   onTriggerScan?: () => void;
   onLoadCachedAnalysis?: (record: any) => void;
+  onRunOnDeviceAnalysis?: (fileBlob: Blob, filename: string) => void;
   offlineRefreshTrigger?: number;
 }
 
@@ -34,6 +35,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   isBackendHealthy,
   onTriggerScan,
   onLoadCachedAnalysis,
+  onRunOnDeviceAnalysis,
   offlineRefreshTrigger,
 }) => {
   const [isEditingUser, setIsEditingUser] = useState(false);
@@ -78,6 +80,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Offline Sync & Cached Audits Indicator */}
             <OfflineSyncIndicator
               onLoadCachedAnalysis={onLoadCachedAnalysis}
+              onRunOnDeviceAnalysis={onRunOnDeviceAnalysis}
               refreshTrigger={offlineRefreshTrigger}
             />
 

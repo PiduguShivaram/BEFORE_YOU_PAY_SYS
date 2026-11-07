@@ -427,6 +427,38 @@ export default function Home() {
     }
   };
 
+  const handleRunOnDeviceQueuedItem = async (fileBlob: Blob, filename: string) => {
+    handleReset();
+    setIsOnDeviceRunning(true);
+    setAppMode("audit");
+    try {
+      const file = new File([fileBlob], filename, { type: fileBlob.type || "application/octet-stream" });
+      setPrimaryFile(file);
+      if (file.type.startsWith("image/")) {
+        setImagePreviewUrl(URL.createObjectURL(file));
+      }
+      const offlineRes = await runOnDeviceOfflineAnalysis(file, (pct, statusText) => {
+        setStreamEvent({
+          stage: "spatial_ocr",
+          status: "processing",
+          progress: pct,
+          message: statusText,
+        });
+      });
+      setOnDeviceResult(offlineRes);
+    } catch (err: any) {
+      console.error("Could not run on-device analysis:", err);
+      setAnalysisError({
+        title: "On-Device Analysis Failed",
+        message: err?.message || "Could not complete local document analysis.",
+        onRetry: () => handleRunOnDeviceQueuedItem(fileBlob, filename),
+      });
+    } finally {
+      setIsOnDeviceRunning(false);
+      setStreamEvent(null);
+    }
+  };
+
   const handleSelectComponent = (comp: FinancialComponent) => {
     setSelectedComponentId(comp.component_id);
     if (comp.amount?.provenance?.bounding_box) {
@@ -602,6 +634,7 @@ export default function Home() {
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
         onLoadCachedAnalysis={handleLoadCachedAnalysis}
+        onRunOnDeviceAnalysis={handleRunOnDeviceQueuedItem}
         offlineRefreshTrigger={offlineRefreshTrigger}
       />
 

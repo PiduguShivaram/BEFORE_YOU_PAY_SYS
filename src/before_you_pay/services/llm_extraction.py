@@ -445,7 +445,11 @@ class HybridLlmExtractionEngine:
                         float(x.replace(",", ""))
                         for x in re.findall(r"\b\d+(?:,\d+)*(?:\.\d+)?\b", matched_line.text)
                     ]
-                    # Filter out qty, item_tot, mrp, and exact 0.0 (tax column)
+                    desc_nums = [
+                        float(x.replace(",", ""))
+                        for x in re.findall(r"\b\d+(?:,\d+)*(?:\.\d+)?\b", desc)
+                    ]
+                    # Filter out qty, item_tot, mrp, numbers in description, HSN codes (>= 100000), and exact 0.0 (tax column)
                     candidates = [
                         n
                         for n in line_nums
@@ -453,12 +457,18 @@ class HybridLlmExtractionEngine:
                         and n != item_tot
                         and (mrp_val is None or n != mrp_val)
                         and n != qty
+                        and n not in desc_nums
+                        and n < 100000
                     ]
-                    if candidates:
+                    # If disc_val is known, filter it out from rate candidates to prioritize printed rate or derived rate
+                    rate_candidates = [n for n in candidates if disc_val is None or n != disc_val]
+                    if rate_candidates:
                         # Prioritize printed unit price / rate column
-                        rate = candidates[0]
+                        rate = rate_candidates[0]
                     elif mrp_val is not None and disc_val is not None and mrp_val > disc_val:
                         rate = round(mrp_val - disc_val, 2)
+                    elif candidates:
+                        rate = candidates[0]
                     elif qty > 0 and raw_rate is not None:
                         rate = round(item_tot / qty, 2)
                 elif mrp_val is not None and disc_val is not None and mrp_val > disc_val:

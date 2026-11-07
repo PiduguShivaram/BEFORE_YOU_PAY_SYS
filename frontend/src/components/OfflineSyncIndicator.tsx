@@ -30,11 +30,13 @@ import { formatCurrency } from "../lib/utils";
 
 interface OfflineSyncIndicatorProps {
   onLoadCachedAnalysis?: (record: CachedAnalysisRecord) => void;
+  onRunOnDeviceAnalysis?: (fileBlob: Blob, filename: string) => void;
   refreshTrigger?: number;
 }
 
 export function OfflineSyncIndicator({
   onLoadCachedAnalysis,
+  onRunOnDeviceAnalysis,
   refreshTrigger = 0,
 }: OfflineSyncIndicatorProps) {
   const [isOnline, setIsOnline] = useState<boolean>(true);
@@ -350,6 +352,18 @@ export function OfflineSyncIndicator({
                       </div>
 
                       <div className="flex items-center gap-2 self-end sm:self-center">
+                        {onRunOnDeviceAnalysis && item.files?.[0]?.blob && (
+                          <button
+                            onClick={() => {
+                              onRunOnDeviceAnalysis(item.files[0].blob, item.filename);
+                              setIsDrawerOpen(false);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-mono font-medium transition flex items-center gap-1"
+                            title="Run client-side OCR and math audit on-device"
+                          >
+                            <span>Analyze On-Device</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => handleRemoveQueueItem(item.id)}
                           className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-900 rounded-lg transition"
