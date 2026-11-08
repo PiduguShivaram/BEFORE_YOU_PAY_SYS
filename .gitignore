@@ -35,4 +35,5 @@ scratch/
 response.json
 agents/
 *.tsbuildinfo
+.tastegate/
 
