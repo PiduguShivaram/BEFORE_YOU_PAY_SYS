@@ -6,6 +6,35 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ??
   (isDev ? "http://127.0.0.1:8000" : "");
 
+let cachedAuthToken: string | null = null;
+let currentTokenUserId: string | null = null;
+
+export async function getAuthToken(userId?: string): Promise<string> {
+  if (cachedAuthToken && (!userId || currentTokenUserId === userId)) {
+    return cachedAuthToken;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/auth/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(userId ? { user_id: userId } : {}),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      cachedAuthToken = data.access_token;
+      currentTokenUserId = data.user_id;
+      return data.access_token;
+    }
+  } catch (e) {
+    console.warn("Could not retrieve session token from auth service:", e);
+  }
+  return "";
+}
+
+export function clearAuthToken(): void {
+  cachedAuthToken = null;
+  currentTokenUserId = null;
+}
 
 export async function analyzeDocument(
   file: File,
@@ -14,6 +43,7 @@ export async function analyzeDocument(
   supportingFile?: File | null,
   signal?: AbortSignal
 ): Promise<FinalDecisionSupportResult> {
+  const token = await getAuthToken(userId);
   const formData = new FormData();
   formData.append("file", file);
   formData.append("user_id", userId);
@@ -22,8 +52,14 @@ export async function analyzeDocument(
     formData.append("supporting_file", supportingFile);
   }
 
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}/api/v1/analyze`, {
     method: "POST",
+    headers,
     body: formData,
     signal,
   });
@@ -59,6 +95,7 @@ export async function analyzeDocumentStream(
   supportingFile?: File | null,
   signal?: AbortSignal
 ): Promise<FinalDecisionSupportResult> {
+  const token = await getAuthToken(userId);
   const formData = new FormData();
   formData.append("file", file);
   formData.append("user_id", userId);
@@ -67,8 +104,14 @@ export async function analyzeDocumentStream(
     formData.append("supporting_file", supportingFile);
   }
 
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}/api/v1/analyze/stream`, {
     method: "POST",
+    headers,
     body: formData,
     signal,
   });
@@ -135,6 +178,7 @@ export async function storeUserDocument(
   textContent: string,
   pageNumber: number = 1
 ): Promise<{ status: string; chunks_indexed: number; user_id: string }> {
+  const token = await getAuthToken(userId);
   const payload = {
     user_id: userId,
     document_id: documentId,
@@ -143,11 +187,16 @@ export async function storeUserDocument(
     text_content: textContent,
   };
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}/api/v1/documents`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
@@ -165,6 +214,47 @@ export async function storeUserDocument(
   return res.json();
 }
 
+export async function listUserDocuments(
+  userId: string
+): Promise<Array<{ document_id: string; document_type: string; chunk_count: number; max_page: number }>> {
+  const token = await getAuthToken(userId);
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE}/api/v1/documents`, {
+    method: "GET",
+    headers,
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to list historical documents");
+  }
+  return res.json();
+}
+
+export async function deleteUserDocument(
+  userId: string,
+  documentId: string
+): Promise<{ status: string; document_id: string; deleted_chunks: number }> {
+  const token = await getAuthToken(userId);
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE}/api/v1/documents/${documentId}`, {
+    method: "DELETE",
+    headers,
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to delete document");
+  }
+  return res.json();
+}
+
 export async function checkBackendHealth(): Promise<{ status: string; app_name: string; version: string }> {
   const res = await fetch(`${API_BASE}/api/health`);
   if (!res.ok) {
@@ -178,14 +268,21 @@ export async function compareQuotes(
   userId: string,
   signal?: AbortSignal
 ): Promise<import("./types").MultiQuoteComparisonResult> {
+  const token = await getAuthToken(userId);
   const formData = new FormData();
   for (const f of files) {
     formData.append("files", f);
   }
   formData.append("user_id", userId);
 
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}/api/v1/compare-quotes`, {
     method: "POST",
+    headers,
     body: formData,
     signal,
   });
@@ -210,6 +307,7 @@ export async function parseDealerResponse(
   quoteFile?: File | null,
   signal?: AbortSignal
 ): Promise<import("./types").DealerResponseAnalysisResult> {
+  const token = await getAuthToken(userId);
   const formData = new FormData();
   formData.append("dealer_text", dealerText);
   formData.append("user_id", userId);
@@ -221,8 +319,14 @@ export async function parseDealerResponse(
     formData.append("quote_file", quoteFile);
   }
 
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}/api/v1/parse-dealer-response`, {
     method: "POST",
+    headers,
     body: formData,
     signal,
   });
@@ -238,5 +342,3 @@ export async function parseDealerResponse(
 
   return res.json();
 }
-
-

@@ -7,7 +7,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 
-from before_you_pay.api.deps import get_pipeline_service
+from before_you_pay.api.deps import (
+    get_optional_authenticated_user_id,
+    get_pipeline_service,
+    verify_tenant_boundary,
+)
 from before_you_pay.models import DocumentClassification, FinalDecisionSupportResult
 from before_you_pay.services.pipeline import PipelineService
 
@@ -31,9 +35,11 @@ async def analyze_document(
         default=DocumentClassification.OTHER,
         description="Optional document type hint",
     ),
+    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
 ) -> FinalDecisionSupportResult:
     """Execute full 7-stage analysis pipeline on uploaded file."""
+    effective_user_id = verify_tenant_boundary(authenticated_user_id, user_id)
     doc_uuid = uuid4()
     content = await file.read()
     mime = file.content_type or "application/octet-stream"
@@ -45,7 +51,7 @@ async def analyze_document(
 
     return await pipeline.run_full_pipeline(
         document_id=doc_uuid,
-        user_id=user_id,
+        user_id=effective_user_id,
         file_bytes=content,
         mime_type=mime,
         document_type_hint=document_classification,
@@ -70,9 +76,11 @@ async def analyze_document_stream(
         default=DocumentClassification.OTHER,
         description="Optional document type hint",
     ),
+    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
 ) -> StreamingResponse:
     """Execute 7-stage pipeline streaming live SSE events to frontend."""
+    effective_user_id = verify_tenant_boundary(authenticated_user_id, user_id)
     doc_uuid = uuid4()
     content = await file.read()
     mime = file.content_type or "application/octet-stream"
@@ -86,7 +94,7 @@ async def analyze_document_stream(
         try:
             async for step in pipeline.run_streaming_pipeline(
                 document_id=doc_uuid,
-                user_id=user_id,
+                user_id=effective_user_id,
                 file_bytes=content,
                 mime_type=mime,
                 document_type_hint=document_classification,

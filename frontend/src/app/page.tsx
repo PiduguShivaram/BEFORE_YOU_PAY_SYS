@@ -27,7 +27,7 @@ import {
   OkfRule,
   RagRecord,
 } from "../lib/types";
-import { analyzeDocument, analyzeDocumentStream, checkBackendHealth, StreamEvent } from "../lib/api";
+import { analyzeDocument, analyzeDocumentStream, checkBackendHealth, clearAuthToken, StreamEvent } from "../lib/api";
 import {
   saveAnalysisToCache,
   enqueueOfflineAudit,
@@ -161,6 +161,7 @@ export default function Home() {
   }, []);
 
   const handleUpdateUserId = (newId: string) => {
+    clearAuthToken();
     setUserId(newId);
     localStorage.setItem("byp_user_id", newId);
   };

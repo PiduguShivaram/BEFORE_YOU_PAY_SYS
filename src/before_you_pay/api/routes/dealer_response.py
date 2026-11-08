@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from before_you_pay.api.deps import (
     get_dealer_response_parser_service,
+    get_optional_authenticated_user_id,
     get_pipeline_service,
+    verify_tenant_boundary,
 )
 from before_you_pay.models import DocumentClassification, StructuredFinancialDocument
 from before_you_pay.models.dealer_response import DealerResponseAnalysisResult
@@ -37,10 +39,12 @@ async def parse_dealer_response(
         default=None,
         description="Optional original quote scan or PDF for itemized component context",
     ),
+    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
     parser_service: DealerResponseParserService = Depends(get_dealer_response_parser_service),
 ) -> DealerResponseAnalysisResult:
     """Execute dealer response extraction and mathematical reconciliation."""
+    effective_user_id = verify_tenant_boundary(authenticated_user_id, user_id)
     if not dealer_text.strip():
         raise HTTPException(
             status_code=400,
@@ -54,11 +58,11 @@ async def parse_dealer_response(
         content = await quote_file.read()
         mime = quote_file.content_type or "application/octet-stream"
 
-        pipeline.precondition.validate_file(content, mime, user_id)
+        pipeline.precondition.validate_file(content, mime, effective_user_id)
         ocr_res = await pipeline.ocr_engine.process_document(doc_uuid, content, mime)
         extraction_res = pipeline.extraction_engine.extract(
             document_id=doc_uuid,
-            user_id=user_id,
+            user_id=effective_user_id,
             ocr_result=ocr_res,
             document_type_hint=DocumentClassification.QUOTATION,
         )
@@ -69,7 +73,7 @@ async def parse_dealer_response(
 
     return parser_service.parse(
         dealer_text=dealer_text,
-        user_id=user_id,
+        user_id=effective_user_id,
         original_document=original_doc,
         original_total=original_total,
         currency=currency,

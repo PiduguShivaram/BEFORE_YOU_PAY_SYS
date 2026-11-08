@@ -4,7 +4,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from before_you_pay.api.deps import get_multi_quote_comparison_service, get_pipeline_service
+from before_you_pay.api.deps import (
+    get_multi_quote_comparison_service,
+    get_optional_authenticated_user_id,
+    get_pipeline_service,
+    verify_tenant_boundary,
+)
 from before_you_pay.models import DocumentClassification, StructuredFinancialDocument
 from before_you_pay.models.multi_quote_comparison import MultiQuoteComparisonResult
 from before_you_pay.services.multi_quote_comparison import MultiQuoteComparisonService
@@ -25,10 +30,12 @@ router = APIRouter(tags=["Multi-Quote Comparison"])
 async def compare_quotes(
     files: list[UploadFile] = File(..., description="2 to 5 quotation documents (images or PDFs)"),
     user_id: UUID = Form(..., description="Tenant user ID"),
+    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
     comparison_service: MultiQuoteComparisonService = Depends(get_multi_quote_comparison_service),
 ) -> MultiQuoteComparisonResult:
     """Execute N-way multi-quote comparison across 2 to 5 files."""
+    effective_user_id = verify_tenant_boundary(authenticated_user_id, user_id)
     if len(files) < 2:
         raise HTTPException(
             status_code=400,
@@ -49,7 +56,7 @@ async def compare_quotes(
         mime = f.content_type or "application/octet-stream"
 
         # Validate precondition
-        pipeline.precondition.validate_file(content, mime, user_id)
+        pipeline.precondition.validate_file(content, mime, effective_user_id)
 
         # OCR
         ocr_res = await pipeline.ocr_engine.process_document(doc_uuid, content, mime)
@@ -57,7 +64,7 @@ async def compare_quotes(
         # Extract structured document
         extraction_res = pipeline.extraction_engine.extract(
             document_id=doc_uuid,
-            user_id=user_id,
+            user_id=effective_user_id,
             ocr_result=ocr_res,
             document_type_hint=DocumentClassification.QUOTATION,
         )
@@ -69,4 +76,4 @@ async def compare_quotes(
         extracted_docs.append(extracted_doc)
 
     # Perform deterministic multi-quote alignment and comparison
-    return comparison_service.compare(documents=extracted_docs, user_id=user_id)
+    return comparison_service.compare(documents=extracted_docs, user_id=effective_user_id)

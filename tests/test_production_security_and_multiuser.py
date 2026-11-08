@@ -82,11 +82,84 @@ class TestMultiUserIsolationAndIdor:
         assert all(c.user_id == user_b for c in res_b)
         assert not any("User A" in c.source_text for c in res_b)
 
-    def test_idor_endpoint_blocks_cross_tenant_access(self, test_client):
-        """API must return 403 Forbidden when User B requests User A's document ID."""
+    def test_missing_authentication_rejected_401(self, test_client):
+        """Private document routes must return 401 when Bearer token is omitted."""
+        resp_get = test_client.get(f"/api/v1/documents/{uuid4()}")
+        assert resp_get.status_code == 401
+        assert "Bearer" in resp_get.headers.get("www-authenticate", "")
+
+        resp_list = test_client.get("/api/v1/documents")
+        assert resp_list.status_code == 401
+
+        resp_post = test_client.post("/api/v1/documents", json={"user_id": str(uuid4()), "text_content": "hello"})
+        assert resp_post.status_code == 401
+
+        resp_del = test_client.delete(f"/api/v1/documents/{uuid4()}")
+        assert resp_del.status_code == 401
+
+    def test_invalid_token_signature_rejected_401(self, test_client):
+        """Tokens with forged, tampered, or invalid signatures must be rejected with 401."""
+        tampered_token = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJleHAiOjE5OTk5OTk5OTl9."
+            "tampered_invalid_signature"
+        )
+        resp = test_client.get(
+            "/api/v1/documents",
+            headers={"Authorization": f"Bearer {tampered_token}"},
+        )
+        assert resp.status_code == 401
+        assert "Invalid authentication token" in resp.json()["detail"]
+
+    def test_expired_credentials_rejected_401(self, test_client):
+        """Expired credentials must be rejected with HTTP 401."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_id = uuid4()
+        expired_token = auth.create_access_token(user_id, expires_in_minutes=-10)
+
+        resp = test_client.get(
+            "/api/v1/documents",
+            headers={"Authorization": f"Bearer {expired_token}"},
+        )
+        assert resp.status_code == 401
+        assert "expired" in resp.json()["detail"].lower()
+
+    def test_forged_user_identifier_in_payload_rejected_403(self, test_client):
+        """Authenticated User A attempting to act as User B in payload must be rejected with 403."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_a = uuid4()
+        user_b = uuid4()
+        token_a = auth.create_access_token(user_a)
+
+        payload = {
+            "user_id": str(user_b),  # Forged target user ID
+            "document_id": str(uuid4()),
+            "document_type": "contract",
+            "page_number": 1,
+            "text_content": "Attempting to write into User B's vault using User A token.",
+        }
+        resp = test_client.post(
+            "/api/v1/documents",
+            json=payload,
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp.status_code == 403
+        assert "Cross-tenant access forbidden" in resp.json()["detail"]
+
+    def test_user_a_accessing_user_b_document_returns_404_no_information_leak(self, test_client):
+        """When User B requests User A's document, API returns 404 to avoid leaking document existence."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
         user_a = uuid4()
         user_b = uuid4()
         doc_a = uuid4()
+        token_a = auth.create_access_token(user_a)
+        token_b = auth.create_access_token(user_b)
 
         # 1. Index document under User A
         payload = {
@@ -96,33 +169,189 @@ class TestMultiUserIsolationAndIdor:
             "page_number": 1,
             "text_content": "Confidential agreement terms for User A.",
         }
-        resp = test_client.post("/api/v1/documents", json=payload)
-        assert resp.status_code == 200
+        resp = test_client.post(
+            "/api/v1/documents",
+            json=payload,
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp.status_code == 201
 
         # 2. User A fetches own document -> 200 OK
         resp_a = test_client.get(
             f"/api/v1/documents/{doc_a}",
-            headers={"X-User-ID": str(user_a)},
+            headers={"Authorization": f"Bearer {token_a}"},
         )
         assert resp_a.status_code == 200
         assert len(resp_a.json()) >= 1
         assert resp_a.json()[0]["source_document_id"] == str(doc_a)
 
-        # 3. User B attempts IDOR attack on doc_a -> 403 Forbidden
+        # 3. User B attempts to access doc_a -> 404 Not Found (avoids leaking existence)
         resp_b = test_client.get(
             f"/api/v1/documents/{doc_a}",
-            headers={"X-User-ID": str(user_b)},
+            headers={"Authorization": f"Bearer {token_b}"},
         )
-        assert resp_b.status_code == 403
-        assert "Access denied" in resp_b.json()["detail"]
+        assert resp_b.status_code == 404
+        assert "not found" in resp_b.json()["detail"].lower()
 
-        # 4. Request for completely nonexistent document -> 404 Not Found
-        missing_doc = uuid4()
-        resp_missing = test_client.get(
-            f"/api/v1/documents/{missing_doc}",
-            headers={"X-User-ID": str(user_a)},
+    def test_user_b_modifying_or_deleting_user_a_document_rejected(self, test_client):
+        """User B cannot delete or modify User A's document."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_a = uuid4()
+        user_b = uuid4()
+        doc_a = uuid4()
+        token_a = auth.create_access_token(user_a)
+        token_b = auth.create_access_token(user_b)
+
+        # User A indexes document
+        test_client.post(
+            "/api/v1/documents",
+            json={
+                "user_id": str(user_a),
+                "document_id": str(doc_a),
+                "document_type": "warranty",
+                "page_number": 1,
+                "text_content": "User A 5-year battery warranty terms.",
+            },
+            headers={"Authorization": f"Bearer {token_a}"},
         )
-        assert resp_missing.status_code == 404
+
+        # User B attempts to DELETE User A's document -> 404 Not Found
+        resp_del_b = test_client.delete(
+            f"/api/v1/documents/{doc_a}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp_del_b.status_code == 404
+
+        # Document still exists intact for User A
+        resp_check = test_client.get(
+            f"/api/v1/documents/{doc_a}",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp_check.status_code == 200
+        assert len(resp_check.json()) >= 1
+
+    def test_authorized_listing_and_deletion_isolated_to_tenant(self, test_client):
+        """Listing documents strictly isolates records to authenticated caller."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_a = uuid4()
+        user_b = uuid4()
+        token_a = auth.create_access_token(user_a)
+        token_b = auth.create_access_token(user_b)
+
+        doc_a1 = uuid4()
+        doc_b1 = uuid4()
+
+        # Index one doc for A and one for B
+        test_client.post(
+            "/api/v1/documents",
+            json={
+                "user_id": str(user_a),
+                "document_id": str(doc_a1),
+                "document_type": "receipt",
+                "page_number": 1,
+                "text_content": "User A electronics receipt total $500.",
+            },
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        test_client.post(
+            "/api/v1/documents",
+            json={
+                "user_id": str(user_b),
+                "document_id": str(doc_b1),
+                "document_type": "contract",
+                "page_number": 1,
+                "text_content": "User B lease agreement.",
+            },
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+
+        # User A lists documents: sees only doc_a1
+        list_a = test_client.get(
+            "/api/v1/documents",
+            headers={"Authorization": f"Bearer {token_a}"},
+        ).json()
+        ids_a = [d["document_id"] for d in list_a]
+        assert str(doc_a1) in ids_a
+        assert str(doc_b1) not in ids_a
+
+        # User B lists documents: sees only doc_b1
+        list_b = test_client.get(
+            "/api/v1/documents",
+            headers={"Authorization": f"Bearer {token_b}"},
+        ).json()
+        ids_b = [d["document_id"] for d in list_b]
+        assert str(doc_b1) in ids_b
+        assert str(doc_a1) not in ids_b
+
+        # User A deletes doc_a1
+        del_resp = test_client.delete(
+            f"/api/v1/documents/{doc_a1}",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert del_resp.status_code == 200
+        assert del_resp.json()["status"] == "deleted"
+
+    def test_direct_document_identifier_guessing_oracle_prevention(self, test_client):
+        """Randomly guessed document IDs return 404, never disclosing system state."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        token = auth.create_access_token(uuid4())
+
+        for _ in range(5):
+            random_id = uuid4()
+            resp = test_client.get(
+                f"/api/v1/documents/{random_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_concurrent_multi_user_access_isolation(self, tmp_path):
+        """Concurrent asynchronous multi-user document indexing and retrieval maintains absolute isolation."""
+        import anyio
+        from before_you_pay.models import RagQuery
+
+        db_file = str(tmp_path / "concurrent_tenant.db")
+        rag = SqliteRagService(db_path=db_file)
+
+        num_users = 10
+        users = [uuid4() for _ in range(num_users)]
+        docs = [uuid4() for _ in range(num_users)]
+
+        async def worker(u_idx: int):
+            uid = users[u_idx]
+            did = docs[u_idx]
+            chunk = RagEvidenceChunk(
+                evidence_id=uuid4(),
+                user_id=uid,
+                source_document_id=did,
+                source_document_type=DocumentClassification.CONTRACT,
+                page_number=1,
+                source_text=f"Secret contract clause for tenant user {u_idx} with rate 1000",
+                similarity_score=1.0,
+            )
+            await rag.index_document_chunks(uid, did, [chunk])
+            # Query back
+            results = await rag.retrieve(
+                RagQuery(
+                    query_text="Secret contract clause",
+                    user_id=uid,
+                    current_document_id=uuid4(),
+                    min_similarity=0.1,
+                )
+            )
+            assert len(results) == 1
+            assert results[0].user_id == uid
+            assert f"tenant user {u_idx}" in results[0].source_text
+
+        async with anyio.create_task_group() as tg:
+            for i in range(num_users):
+                tg.start_soon(worker, i)
 
 
 class TestSqlInjectionDefense:

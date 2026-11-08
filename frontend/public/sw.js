@@ -5,7 +5,10 @@ const STATIC_ASSETS = [
   "/manifest.json",
   "/icon.svg",
   "/favicon.ico",
-  "/sample_handwritten_quotation.jpeg"
+  "/sample_handwritten_quotation.jpeg",
+  "/tesseract/worker.min.js",
+  "/tesseract/tesseract-core-simd-lstm.wasm.js",
+  "/tesseract/tesseract-core-simd-lstm.wasm"
 ];
 
 self.addEventListener("install", (event) => {

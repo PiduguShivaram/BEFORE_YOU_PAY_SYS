@@ -78,6 +78,11 @@ class TestDocumentUploadAndAnalyze:
         self, client: TestClient, sample_user_id: UUID
     ) -> None:
         """Test saving a past agreement or warranty into user's RAG index."""
+        from before_you_pay.services.auth import AuthService
+
+        auth_service = AuthService()
+        token = auth_service.create_access_token(sample_user_id)
+
         payload = {
             "user_id": str(sample_user_id),
             "document_id": str(uuid4()),
@@ -85,8 +90,12 @@ class TestDocumentUploadAndAnalyze:
             "page_number": 1,
             "text_content": "Agreement: Monthly Cloud Hosting agreed at $80.00 through 2026.",
         }
-        response = client.post("/api/v1/documents", json=payload)
-        assert response.status_code == 200
+        response = client.post(
+            "/api/v1/documents",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code in (200, 201)
         data = response.json()
         assert data["status"] == "indexed"
         assert data["chunks_indexed"] == 1

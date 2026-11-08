@@ -15,23 +15,35 @@ export const OnDeviceAnalysisCard: React.FC<OnDeviceAnalysisCardProps> = ({
 }) => {
   const isReconciled = result.math_status === "RECONCILED";
   const hasDiscrepancy = result.math_status === "DISCREPANCY";
+  const isUnavailable = result.status === "ANALYSIS_UNAVAILABLE";
+  const isCompletedOnDevice = result.status === "COMPLETED_ON_DEVICE";
   const currSym = result.currency === "USD" ? "$" : "₹";
 
   return (
-    <div className="glass-panel rounded-2xl p-6 mb-8 border border-emerald-500/40 shadow-glow bg-gradient-to-b from-slate-900/90 to-slate-950/90 transition-all">
+    <div className={`glass-panel rounded-2xl p-6 mb-8 shadow-glow bg-gradient-to-b from-slate-900/90 to-slate-950/90 transition-all border ${
+      isUnavailable ? "border-rose-500/40" : "border-emerald-500/40"
+    }`}>
       {/* Header with On-Device Chip */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+          <div className={`p-2.5 rounded-xl border ${
+            isUnavailable
+              ? "bg-rose-500/10 border-rose-500/30 text-rose-400"
+              : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+          }`}>
             <Cpu className="w-5 h-5 animate-pulse" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                Analysis completed on-device
+              <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full border ${
+                isUnavailable
+                  ? "bg-rose-500/20 text-rose-300 border-rose-500/30"
+                  : "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+              }`}>
+                {isUnavailable ? "Analysis unavailable" : "Analysis completed on-device"}
               </span>
               <span className="text-[11px] text-slate-400 font-mono">
-                Pure Local WebWorker
+                {isUnavailable ? "Offline Asset Gate" : "Pure Local WebWorker"}
               </span>
             </div>
             <h3 className="text-lg font-bold text-white tracking-tight mt-1">
@@ -48,8 +60,12 @@ export const OnDeviceAnalysisCard: React.FC<OnDeviceAnalysisCardProps> = ({
 
       {/* 5 Distinct Status Indicators Ledger */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 my-4 p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] font-mono">
-        <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+        <div className={`p-2 rounded flex items-center gap-1.5 ${
+          isCompletedOnDevice
+            ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold"
+            : "bg-slate-900 border border-slate-800 text-slate-400"
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${isCompletedOnDevice ? "bg-emerald-400 animate-ping" : "bg-slate-600"}`}></span>
           Analysis completed on-device
         </div>
         <div className="p-2 rounded bg-slate-900 border border-slate-800 text-slate-400 flex items-center gap-1.5">
@@ -64,8 +80,12 @@ export const OnDeviceAnalysisCard: React.FC<OnDeviceAnalysisCardProps> = ({
           <span className="w-2 h-2 rounded-full bg-slate-600"></span>
           Cloud analysis pending
         </div>
-        <div className="p-2 rounded bg-slate-900 border border-slate-800 text-slate-400 flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-slate-600"></span>
+        <div className={`p-2 rounded flex items-center gap-1.5 ${
+          isUnavailable
+            ? "bg-rose-500/15 border border-rose-500/30 text-rose-300 font-semibold"
+            : "bg-slate-900 border border-slate-800 text-slate-400"
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${isUnavailable ? "bg-rose-400 animate-ping" : "bg-slate-600"}`}></span>
           Analysis unavailable
         </div>
       </div>

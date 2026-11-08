@@ -19,8 +19,11 @@ export async function runOnDeviceOfflineAnalysis(
     // Dynamic import ensures zero bundle impact until explicitly invoked
     const { createWorker } = await import("tesseract.js");
 
-    onProgress?.(25, "Loading neural OCR model in WebWorker...");
+    onProgress?.(25, "Loading local OCR WebWorker and WASM assets...");
+    const isBrowser = typeof window !== "undefined";
     const worker = await createWorker("eng", 1, {
+      workerPath: isBrowser ? "/tesseract/worker.min.js" : undefined,
+      corePath: isBrowser ? "/tesseract/tesseract-core-simd-lstm.wasm.js" : undefined,
       logger: (m) => {
         if (m.status === "recognizing text" && typeof m.progress === "number") {
           const pct = Math.round(25 + m.progress * 65);

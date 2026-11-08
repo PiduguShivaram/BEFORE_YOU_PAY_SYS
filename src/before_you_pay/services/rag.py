@@ -5,6 +5,7 @@ The current retrieval system is lexical/token-overlap based and does not use neu
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from before_you_pay.models import (
@@ -226,3 +227,39 @@ class SqliteRagService:
         with self._get_connection() as conn:
             row = conn.execute(sql, (str(document_id),)).fetchone()
         return row is not None
+
+    async def list_user_documents(
+        self,
+        user_id: UUID,
+    ) -> list[dict[str, Any]]:
+        """List distinct documents indexed under user_id."""
+        sql = """
+            SELECT source_document_id, source_document_type, COUNT(*) as chunk_count, MAX(page_number) as max_page
+            FROM user_chunks
+            WHERE user_id = ?
+            GROUP BY source_document_id, source_document_type
+            ORDER BY source_document_id ASC
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (str(user_id),)).fetchall()
+        return [
+            {
+                "document_id": UUID(row["source_document_id"]),
+                "document_type": DocumentClassification(row["source_document_type"]),
+                "chunk_count": int(row["chunk_count"]),
+                "max_page": int(row["max_page"]),
+            }
+            for row in rows
+        ]
+
+    async def delete_user_document(
+        self,
+        user_id: UUID,
+        document_id: UUID,
+    ) -> int:
+        """Delete all chunks for a document strictly owned by user_id."""
+        sql = "DELETE FROM user_chunks WHERE user_id = ? AND source_document_id = ?"
+        with self._get_connection() as conn:
+            cursor = conn.execute(sql, (str(user_id), str(document_id)))
+            conn.commit()
+            return cursor.rowcount

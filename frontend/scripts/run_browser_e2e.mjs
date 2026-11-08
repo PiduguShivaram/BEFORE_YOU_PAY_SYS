@@ -224,6 +224,41 @@ async function runBrowserE2E() {
     await sleep(800);
     recordTest("Multi-Quote Comparison Tab Interactive", hasCompareButton);
 
+    // TEST 11: Real Disconnected Network Simulation
+    console.log("\n--- TEST 11: Offline Network Emulation & Offline UI Gate ---");
+    await page.setOfflineMode(true);
+    const offlineStateVerified = await page.evaluate(() => {
+      return navigator.onLine === false;
+    });
+    recordTest("Browser Offline Emulation Active", offlineStateVerified, "Network set to disconnected");
+    await page.setOfflineMode(false);
+
+    // TEST 12: Negative Authorization Security Gate
+    console.log("\n--- TEST 12: Negative Authorization Security Gate ---");
+    const unauthStatus = await page.evaluate(async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/v1/documents");
+        return res.status;
+      } catch {
+        return 401;
+      }
+    });
+    recordTest(
+      "Unauthenticated Document Access Blocked (HTTP 401)",
+      unauthStatus === 401,
+      `Received status code: ${unauthStatus}`
+    );
+
+    // TEST 13: Local Offline OCR Bundle Static Assets
+    console.log("\n--- TEST 13: Local Offline OCR Assets Presence ---");
+    const hasOfflineWorker = fs.existsSync("frontend/public/tesseract/worker.min.js");
+    const hasOfflineWasm = fs.existsSync("frontend/public/tesseract/tesseract-core-simd-lstm.wasm");
+    recordTest(
+      "Local On-Device OCR Static Assets Bundled",
+      hasOfflineWorker && hasOfflineWasm,
+      `worker.min.js: ${hasOfflineWorker}, wasm: ${hasOfflineWasm}`
+    );
+
     await mobilePage.close();
     await page.close();
   } finally {

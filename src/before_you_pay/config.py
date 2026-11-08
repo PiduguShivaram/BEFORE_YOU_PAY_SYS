@@ -53,6 +53,21 @@ class Settings(BaseSettings):
             return items if items else ["*"]
         return list(v)
 
+    # Authentication & Multi-Tenant Security
+    auth_secret_key: str = Field(
+        default="byp-secure-token-key-2026-production-hardening-secret-32b",
+        description="HMAC-SHA256 secret key for signing authentication tokens.",
+    )
+    auth_token_expire_minutes: int = Field(
+        default=1440,
+        description="Access token lifespan in minutes (default 24 hours).",
+    )
+    auth_algorithm: str = "HS256"
+    auth_enforce: bool = Field(
+        default=True,
+        description="Whether to strictly enforce bearer token authentication on tenant routes.",
+    )
+
     # Document Ingestion Limits
     max_upload_size_mb: int = 25
 
