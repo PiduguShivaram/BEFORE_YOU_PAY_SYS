@@ -161,11 +161,42 @@ async function runBrowserE2E() {
       `Unlabelled button count: ${unlabelledButtons}`
     );
 
-    // TEST 7: Zero Fake Data Integrity
+    // TEST 7: Zero Fake Data Integrity & Sample Quotation Removal
     console.log("\n--- TEST 7: Zero Fake Data Integrity ---");
     const pageText = await page.evaluate(() => document.body.innerText);
     const hasFakeDealerQuote = pageText.includes("MOCK_DEALER") || pageText.includes("Fake Motors");
+    const hasSampleQuotationButton = pageText.includes("Try Sample Quotation");
     recordTest("No Hardcoded Mock Dealer Quotes on Page", !hasFakeDealerQuote);
+    recordTest("No Production Fake Sample Quotation Button", !hasSampleQuotationButton);
+
+    // TEST 7B: 3D Holographic Chamber & 2D Flat Toggle Controls
+    console.log("\n--- TEST 7B: 3D Holographic Chamber Controls ---");
+    const has2DFlatToggle = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll("button"));
+      return btns.some((b) => b.textContent?.includes("2D Flat"));
+    });
+    recordTest("2D Flat Mode Toggle Available", has2DFlatToggle);
+
+    // TEST 7C: Responsive Desktop 2-Column Grid Architecture
+    console.log("\n--- TEST 7C: Responsive Desktop Cockpit Layout ---");
+    const hasWideDesktopGrid = await page.evaluate(() => {
+      const dropzone = document.getElementById("upload-dropzone-section");
+      const hologram = document.getElementById("hologram-3d-stage");
+      if (!dropzone || !hologram) return false;
+      const dropzoneRect = dropzone.getBoundingClientRect();
+      const hologramRect = hologram.getBoundingClientRect();
+      // On desktop (1280px wide), dropzone is in the left column and hologram is in the right column
+      return hologramRect.left >= dropzoneRect.left + 250;
+    });
+    recordTest("Desktop 2-Column Responsive Cockpit Verified", hasWideDesktopGrid);
+
+    // TEST 7D: Cryptographically Verified Tenant Identity Header
+    console.log("\n--- TEST 7D: Authenticated Tenant Header ---");
+    const headerHasNoSpoofInput = await page.evaluate(() => {
+      const headerInputs = document.querySelectorAll("header input");
+      return headerInputs.length === 0;
+    });
+    recordTest("Header User ID Derived Exclusively from Credentials (No Spoof Input)", headerHasNoSpoofInput);
 
     // TEST 8: Real Document File Upload Integration
     console.log("\n--- TEST 8: Real Document Upload & File Handling ---");

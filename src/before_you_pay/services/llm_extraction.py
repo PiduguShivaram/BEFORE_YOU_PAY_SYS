@@ -438,8 +438,15 @@ class HybridLlmExtractionEngine:
 
             matched_line = self._find_matching_line(desc, all_lines)
 
-            # Prevent OCR-extracted 0.00 tax column from being erroneously assigned as unit price
-            if (rate is None or rate <= 0.0) and item_tot > 0:
+            # Prevent OCR-extracted 0.00 tax column from being erroneously assigned as unit price,
+            # and prevent MRP value from being mistakenly assigned as unit price when a discount applies.
+            if (
+                rate is None
+                or rate <= 0.0
+                or (
+                    mrp_val is not None and rate == mrp_val and item_tot > 0 and item_tot != mrp_val
+                )
+            ) and item_tot > 0:
                 if matched_line:
                     line_nums = [
                         float(x.replace(",", ""))
@@ -865,8 +872,24 @@ class HybridLlmExtractionEngine:
         # Stated Total Amount
         raw_total = float(parsed.get("total_amount") or 0.0)
         fallback_total_field = self.fallback_engine._extract_total(document_id, all_lines)
+        computed_items = sum(float(it.total_price.normalized_value or 0.0) for it in line_items)
+        ship_amt = float(shipping_field.normalized_value) if shipping_field else 0.0
+        tax_amt = float(tax_field.normalized_value) if tax_field else 0.0
 
-        if raw_total > 0.0:
+        # If LLM raw_total is lower than sum of line items (e.g. LLM picked a single line item),
+        # but the fallback total matches the full mathematical reconciliation, prefer the verified total.
+        if (
+            fallback_total_field
+            and float(fallback_total_field.normalized_value or 0.0) > raw_total
+            and computed_items > 0
+            and abs(
+                float(fallback_total_field.normalized_value)
+                - (computed_items + ship_amt + tax_amt + raw_fee)
+            )
+            < 2.0
+        ):
+            total_field = fallback_total_field
+        elif raw_total > 0.0:
             matched_tot = self._find_matching_pattern(r"total", all_lines)
             total_field = ExtractedField(
                 field_key="total_amount",

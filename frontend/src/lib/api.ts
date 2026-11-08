@@ -36,6 +36,41 @@ export function clearAuthToken(): void {
   currentTokenUserId = null;
 }
 
+export async function getCurrentUserProfile(token?: string): Promise<{ user_id: string; authenticated: boolean } | null> {
+  const activeToken = token || (await getAuthToken());
+  if (!activeToken) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${activeToken}`,
+      },
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn("Failed to fetch verified user profile:", err);
+  }
+  return null;
+}
+
+export async function createFreshSession(): Promise<{ user_id: string; access_token: string }> {
+  clearAuthToken();
+  const res = await fetch(`${API_BASE}/api/v1/auth/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    throw new Error("Failed to create fresh authenticated session");
+  }
+  const data = await res.json();
+  cachedAuthToken = data.access_token;
+  currentTokenUserId = data.user_id;
+  return { user_id: data.user_id, access_token: data.access_token };
+}
+
 export async function analyzeDocument(
   file: File,
   userId: string,

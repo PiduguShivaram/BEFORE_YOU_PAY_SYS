@@ -16,6 +16,8 @@ import {
   Scale,
   Binary,
   Compass,
+  Eye,
+  Sliders,
 } from "lucide-react";
 import {
   FinalDecisionSupportResult,
@@ -42,9 +44,9 @@ export function Holographic3DScanner({
   onSelectComponent,
   onTriggerUpload,
 }: Holographic3DScannerProps) {
-  // 3D Orbit Camera Angles
-  const [rotX, setRotX] = useState<number>(16);
-  const [rotY, setRotY] = useState<number>(-18);
+  // 3D Orbit Camera Angles (Strictly clamped to front-facing range so text is never inverted/mirrored)
+  const [rotX, setRotX] = useState<number>(14);
+  const [rotY, setRotY] = useState<number>(-14);
   const [rotZ, setRotZ] = useState<number>(0);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -52,19 +54,46 @@ export function Holographic3DScanner({
   const [isAutoRotating, setIsAutoRotating] = useState<boolean>(true);
   const [activeFlagIdx, setActiveFlagIdx] = useState<number>(0);
 
-  // Auto-rotation idle loop
+  // Respect system reduced-motion preference
   useEffect(() => {
-    if (!isAutoRotating || isDragging) return;
+    if (typeof window !== "undefined") {
+      const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+      if (mediaQuery.matches) {
+        setViewPreset("flat");
+        setIsAutoRotating(false);
+        setRotX(0);
+        setRotY(0);
+        setRotZ(0);
+      }
+      const listener = (e: MediaQueryListEvent) => {
+        if (e.matches) {
+          setViewPreset("flat");
+          setIsAutoRotating(false);
+          setRotX(0);
+          setRotY(0);
+          setRotZ(0);
+        }
+      };
+      mediaQuery.addEventListener("change", listener);
+      return () => mediaQuery.removeEventListener("change", listener);
+    }
+  }, []);
+
+  // Auto-rotation idle loop with smooth wave sway (never spins 360° to avoid backwards mirrored text)
+  useEffect(() => {
+    if (!isAutoRotating || isDragging || viewPreset === "flat") return;
     let animId: number;
     let angle = 0;
     const loop = () => {
-      angle += 0.006;
+      angle += 0.007;
       if (viewPreset === "orbit") {
-        setRotY((prev) => (prev + 0.18) % 360);
-        setRotX(14 + Math.sin(angle) * 4);
+        // Forward oscillation: bounds rotY between -24° and +24° ensuring 100% readable, un-mirrored text
+        setRotY(Math.sin(angle) * 24);
+        setRotX(12 + Math.cos(angle * 1.4) * 4);
       } else if (viewPreset === "isometric") {
-        setRotY(-18 + Math.sin(angle * 2) * 4);
-        setRotX(16 + Math.cos(angle * 2) * 2.5);
+        // Gentle isometric breathing motion
+        setRotY(-14 + Math.sin(angle * 1.5) * 4);
+        setRotX(14 + Math.cos(angle * 1.5) * 2);
       }
       animId = requestAnimationFrame(loop);
     };
@@ -72,8 +101,9 @@ export function Holographic3DScanner({
     return () => cancelAnimationFrame(animId);
   }, [isAutoRotating, isDragging, viewPreset]);
 
-  // Mouse drag for full 3D orbital manipulation
+  // Mouse drag for controlled 3D tilt with strict forward-facing clamping
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (viewPreset === "flat") return;
     setIsDragging(true);
     setIsAutoRotating(false);
     setDragStart({ x: e.clientX, y: e.clientY });
@@ -81,14 +111,15 @@ export function Holographic3DScanner({
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!isDragging) return;
+      if (!isDragging || viewPreset === "flat") return;
       const deltaX = e.clientX - dragStart.x;
       const deltaY = e.clientY - dragStart.y;
-      setRotY((prev) => (prev + deltaX * 0.45) % 360);
-      setRotX((prev) => Math.max(-60, Math.min(60, prev - deltaY * 0.45)));
+      // Clamp strictly within [-32°, +32°] on Y and [-20°, +20°] on X so document is NEVER reversed
+      setRotY((prev) => Math.max(-32, Math.min(32, prev + deltaX * 0.35)));
+      setRotX((prev) => Math.max(-20, Math.min(20, prev - deltaY * 0.35)));
       setDragStart({ x: e.clientX, y: e.clientY });
     },
-    [isDragging, dragStart]
+    [isDragging, dragStart, viewPreset]
   );
 
   const handleMouseUp = () => {
@@ -98,21 +129,24 @@ export function Holographic3DScanner({
   const handleSetPreset = (preset: "isometric" | "exploded" | "orbit" | "flat") => {
     setViewPreset(preset);
     if (preset === "isometric") {
-      setRotX(20);
-      setRotY(-20);
-      setRotZ(2);
+      setRotX(16);
+      setRotY(-16);
+      setRotZ(0);
+      setIsAutoRotating(true);
     } else if (preset === "flat") {
       setRotX(0);
       setRotY(0);
       setRotZ(0);
       setIsAutoRotating(false);
     } else if (preset === "exploded") {
-      setRotX(26);
-      setRotY(-30);
+      setRotX(20);
+      setRotY(-22);
       setRotZ(0);
       setIsAutoRotating(false);
     } else if (preset === "orbit") {
-      setRotX(15);
+      setRotX(12);
+      setRotY(0);
+      setRotZ(0);
       setIsAutoRotating(true);
     }
   };
@@ -163,7 +197,7 @@ export function Holographic3DScanner({
           </div>
         </div>
 
-        {/* 3D Camera Preset Switcher */}
+        {/* 3D Camera Preset Switcher & 2D Flat Toggle */}
         <div className="flex items-center gap-1.5 bg-slate-900/90 border border-white/10 rounded-xl p-1 text-xs">
           <button
             type="button"
@@ -198,18 +232,19 @@ export function Holographic3DScanner({
             }`}
           >
             <RotateCw className="w-3 h-3" />
-            <span>360° Orbit</span>
+            <span>Holographic Orbit</span>
           </button>
           <button
             type="button"
             onClick={() => handleSetPreset("flat")}
-            className={`px-2.5 py-1 rounded-lg font-medium transition ${
+            className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1 ${
               viewPreset === "flat"
-                ? "bg-slate-800 text-white border border-white/20"
+                ? "bg-slate-800 text-cyan-300 border border-cyan-500/40 shadow-sm"
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            Flat
+            <Eye className="w-3 h-3" />
+            <span>2D Flat</span>
           </button>
         </div>
       </div>
@@ -222,31 +257,48 @@ export function Holographic3DScanner({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          className="lg:col-span-8 relative h-[380px] sm:h-[440px] flex items-center justify-center cursor-grab active:cursor-grabbing select-none overflow-hidden rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-950/95 border border-white/10"
-          style={{ perspective: "1200px" }}
+          className={`lg:col-span-8 relative h-[380px] sm:h-[440px] flex items-center justify-center select-none overflow-hidden rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-950/95 border border-white/10 ${
+            viewPreset === "flat" ? "cursor-default" : "cursor-grab active:cursor-grabbing"
+          }`}
+          style={{ perspective: viewPreset === "flat" ? "none" : "1200px" }}
         >
           {/* Spatial 3D Laser Horizon Floor */}
-          <div
-            className="absolute w-[500px] h-[500px] pointer-events-none rounded-full"
-            style={{
-              background:
-                "radial-gradient(circle, rgba(6, 182, 212, 0.18) 0%, rgba(99, 102, 241, 0.06) 50%, transparent 70%)",
-              transform: "translateY(140px) rotateX(75deg)",
-            }}
-          />
+          {viewPreset !== "flat" && (
+            <div
+              className="absolute w-[500px] h-[500px] pointer-events-none rounded-full"
+              style={{
+                background:
+                  "radial-gradient(circle, rgba(6, 182, 212, 0.18) 0%, rgba(99, 102, 241, 0.06) 50%, transparent 70%)",
+                transform: "translateY(140px) rotateX(75deg)",
+              }}
+            />
+          )}
 
           {/* Interactive Drag Hint */}
           <div className="absolute top-3 left-3 z-30 px-2.5 py-1 rounded-full bg-slate-900/80 border border-white/10 text-[10px] text-slate-300 flex items-center gap-1.5 backdrop-blur-md">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            <span>Click & drag to rotate 3D view</span>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                viewPreset === "flat" ? "bg-slate-400" : "bg-cyan-400 animate-pulse"
+              }`}
+            />
+            <span>
+              {viewPreset === "flat"
+                ? "2D Flat View (Click presets above for 3D)"
+                : "Click & drag to tilt 3D view (Readable & un-mirrored)"}
+            </span>
           </div>
 
           {/* ══════════ THE 3D ROTATING DOCUMENT / VAULT STAGE ══════════ */}
           <div
             className="relative w-[280px] sm:w-[330px] h-[340px] sm:h-[390px] transition-transform duration-75 ease-out will-change-transform preserve-3d"
             style={{
-              transform: `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZ}deg)`,
+              transform:
+                viewPreset === "flat"
+                  ? "none"
+                  : `rotateX(${rotX}deg) rotateY(${rotY}deg) rotateZ(${rotZ}deg)`,
               transformStyle: "preserve-3d",
+              backfaceVisibility: "hidden",
+              WebkitBackfaceVisibility: "hidden",
             }}
           >
             {/* Exploded Z-Plane: Bottom Geometry Grid */}
@@ -271,8 +323,10 @@ export function Holographic3DScanner({
             <div
               className="absolute inset-0 rounded-2xl bg-slate-900/95 border border-cyan-500/35 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_35px_rgba(6,182,212,0.25)] p-4 flex flex-col justify-between overflow-hidden backdrop-blur-2xl preserve-3d"
               style={{
-                transform: "translateZ(0px)",
+                transform: viewPreset === "flat" ? "none" : "translateZ(0px)",
                 transformStyle: "preserve-3d",
+                backfaceVisibility: "hidden",
+                WebkitBackfaceVisibility: "hidden",
               }}
             >
               {/* Dynamic 3D Laser Sweep */}

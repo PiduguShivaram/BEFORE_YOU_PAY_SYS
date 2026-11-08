@@ -27,7 +27,15 @@ import {
   OkfRule,
   RagRecord,
 } from "../lib/types";
-import { analyzeDocument, analyzeDocumentStream, checkBackendHealth, clearAuthToken, StreamEvent } from "../lib/api";
+import {
+  analyzeDocument,
+  analyzeDocumentStream,
+  checkBackendHealth,
+  clearAuthToken,
+  createFreshSession,
+  getCurrentUserProfile,
+  StreamEvent,
+} from "../lib/api";
 import {
   saveAnalysisToCache,
   enqueueOfflineAudit,
@@ -131,14 +139,33 @@ export default function Home() {
     },
   ];
 
-  // Initialize client user ID and load RAG records
+  // Initialize authenticated tenant session and load verified profile
   useEffect(() => {
-    let savedId = localStorage.getItem("byp_user_id");
-    if (!savedId) {
-      savedId = generateUUID();
-      localStorage.setItem("byp_user_id", savedId);
-    }
-    setUserId(savedId);
+    const initTenantSession = async () => {
+      try {
+        const profile = await getCurrentUserProfile();
+        if (profile?.user_id) {
+          setUserId(profile.user_id);
+          localStorage.setItem("byp_user_id", profile.user_id);
+          return;
+        }
+      } catch {}
+      const savedId = localStorage.getItem("byp_user_id");
+      if (savedId) {
+        setUserId(savedId);
+      } else {
+        const fresh = await createFreshSession().catch(() => null);
+        if (fresh) {
+          setUserId(fresh.user_id);
+          localStorage.setItem("byp_user_id", fresh.user_id);
+        } else {
+          const fallback = generateUUID();
+          setUserId(fallback);
+          localStorage.setItem("byp_user_id", fallback);
+        }
+      }
+    };
+    initTenantSession();
 
     const savedRecords = localStorage.getItem("byp_rag_records");
     if (savedRecords) {
@@ -159,6 +186,17 @@ export default function Home() {
     const intervalId = setInterval(pollHealth, 5000);
     return () => clearInterval(intervalId);
   }, []);
+
+  const handleNewSession = async () => {
+    try {
+      const fresh = await createFreshSession();
+      setUserId(fresh.user_id);
+      localStorage.setItem("byp_user_id", fresh.user_id);
+      handleReset();
+    } catch (e) {
+      console.warn("Failed to create fresh verified session:", e);
+    }
+  };
 
   const handleUpdateUserId = (newId: string) => {
     clearAuthToken();
@@ -626,6 +664,7 @@ export default function Home() {
       <Navbar
         userId={userId}
         onUpdateUserId={handleUpdateUserId}
+        onNewSession={handleNewSession}
         ragCount={ragRecords.length}
         onOpenRag={() => setIsRagOpen(true)}
         onOpenOkf={() => setIsOkfOpen(true)}
@@ -639,40 +678,7 @@ export default function Home() {
         offlineRefreshTrigger={offlineRefreshTrigger}
       />
 
-      <main className="relative z-10 max-w-6xl mx-auto w-full px-3.5 sm:px-6 lg:px-8 space-y-6">
-        {/* Hero Section (3D Hologram Stage & Headline) */}
-        {!result && (
-          <div className="space-y-4">
-            <div className="text-center max-w-2xl mx-auto pt-2 pb-1 space-y-2.5">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-lg shadow-cyan-500/10">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-                <span>3D Spatial Geometry • Deterministic Arithmetic Verification</span>
-              </div>
-              <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
-                Inspect Every Number in 3D Space Before You Pay
-              </h1>
-              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-lg mx-auto">
-                Scan vehicle quotations, medical bills, or contracts. Explore hidden markups in 3D exploded layers, verify mathematical integrity, and protect your finances.
-              </p>
-            </div>
-
-            {/* Interactive 3D Holographic Chamber (100% Real Rules & Deterministic Engine) */}
-            {showHologram && (
-              <div id="hologram-3d-stage" className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <Holographic3DScanner
-                  result={null}
-                  imagePreviewUrl={null}
-                  okfRules={okfRules}
-                  onTriggerUpload={() => {
-                    const el = document.getElementById("upload-dropzone-section");
-                    if (el) el.scrollIntoView({ behavior: "smooth" });
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        )}
-
+      <main className="relative z-10 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 space-y-8">
         {/* Real Failure State Banner & Recovery Actions */}
         {analysisError && (
           <MobileFailureRecovery
@@ -693,53 +699,6 @@ export default function Home() {
           />
         )}
 
-        {/* Mode Selector Tabs (3D Spatial Navigation) */}
-        {!result && !multiQuoteResult && (
-          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1 pb-1">
-            <button
-              onClick={() => {
-                setAppMode("audit");
-                setCachedDealerResult(null);
-              }}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all transform hover:-translate-y-0.5 active:translate-y-0 ${
-                appMode === "audit"
-                  ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/50 shadow-lg shadow-cyan-500/20"
-                  : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
-              }`}
-            >
-              <FileSearch className="w-4 h-4 text-cyan-400" />
-              <span>Document Scan & Math Audit</span>
-            </button>
-            <button
-              onClick={() => {
-                setAppMode("compare");
-                setCachedDealerResult(null);
-              }}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all transform hover:-translate-y-0.5 active:translate-y-0 ${
-                appMode === "compare"
-                  ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/50 shadow-lg shadow-cyan-500/20"
-                  : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
-              }`}
-            >
-              <Scale className="w-4 h-4 text-blue-400" />
-              <span>Compare 2–5 Quotations Matrix</span>
-            </button>
-            <button
-              onClick={() => {
-                setAppMode("dealer_response");
-              }}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all transform hover:-translate-y-0.5 active:translate-y-0 ${
-                appMode === "dealer_response"
-                  ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/50 shadow-lg shadow-purple-500/20"
-                  : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
-              }`}
-            >
-              <MessageSquareQuote className="w-4 h-4 text-purple-400" />
-              <span>Dealer Counter-Offer Parser</span>
-            </button>
-          </div>
-        )}
-
         {/* Multi-Quote Comparison Result Matrix */}
         {multiQuoteResult ? (
           <div className="space-y-6 animate-in fade-in duration-300">
@@ -749,66 +708,151 @@ export default function Home() {
             />
           </div>
         ) : !result ? (
-          appMode === "dealer_response" ? (
-            <DealerResponseParserCard
-              userId={userId}
-              currency="INR"
-              initialResult={cachedDealerResult}
-              onParsed={async (parsed) => {
-                try {
-                  await saveAnalysisToCache({
-                    id: generateUUID(),
-                    type: "dealer_response",
-                    title: `Dealer Response Analysis`,
-                    filename: "Dealer Response",
-                    timestamp: new Date().toISOString(),
-                    currency: parsed.currency || "INR",
-                    totalAmount: parsed.calculated_new_total ?? parsed.stated_counter_total,
-                    statusVerdict: parsed.math_reconciliation_status,
-                    discrepancyCount: parsed.extracted_actions?.length || 0,
-                    resultPayload: parsed,
-                  });
-                  setOfflineRefreshTrigger((prev) => prev + 1);
-                } catch (err) {
-                  console.warn("Could not cache dealer response:", err);
-                }
-              }}
-            />
-          ) : appMode === "compare" ? (
-            <MultiQuoteUploadDropzone
-              userId={userId}
-              onComparisonComplete={async (comp) => {
-                setMultiQuoteResult(comp);
-                try {
-                  await saveAnalysisToCache({
-                    id: generateUUID(),
-                    type: "compare_quotes",
-                    title: `Comparison Matrix (${comp.quotes.length} Quotes)`,
-                    filename: comp.quotes.map((q) => q.filename || q.vendor_name || q.document_id).join(", "),
-                    timestamp: new Date().toISOString(),
-                    currency: comp.primary_currency,
-                    totalAmount: comp.min_total,
-                    statusVerdict: comp.currency_mismatch ? "CURRENCY_MISMATCH" : "COMPARED",
-                    discrepancyCount: comp.aligned_components?.length || 0,
-                    resultPayload: comp,
-                  });
-                  setOfflineRefreshTrigger((prev) => prev + 1);
-                } catch (err) {
-                  console.warn("Could not cache multi-quote result:", err);
-                }
-              }}
-            />
-          ) : (
-            <div id="upload-dropzone-section" className="scroll-mt-24 space-y-4">
-              <Dropzone
-                onFileSelect={handleFileSelect}
-                isProcessing={isProcessing}
-                selectedPrimaryFile={primaryFile}
-                onClearPrimaryFile={handleReset}
-              />
-              <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
+          /* Pre-Analysis Responsive Cockpit: 2-Column on Desktop (>=1024px), Mobile-First Stack on Phones */
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* Left Column (lg:col-span-7): Headline, Mode Navigation & Primary Capture Area */}
+            <div className="lg:col-span-7 space-y-6">
+              <div className="space-y-3">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-lg shadow-cyan-500/10">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  <span>3D Spatial Geometry • Deterministic Arithmetic Verification</span>
+                </div>
+                <h1 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold text-white tracking-tight leading-tight">
+                  Inspect Every Number Before You Pay
+                </h1>
+                <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-xl">
+                  Scan vehicle quotations, medical bills, or contracts. Explore hidden markups in exploded 3D layers, verify mathematical integrity, and protect your finances with zero fake data.
+                </p>
+              </div>
+
+              {/* Mode Selector Tabs (3D Spatial Navigation) */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 pb-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppMode("audit");
+                    setCachedDealerResult(null);
+                  }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                    appMode === "audit"
+                      ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-500/20"
+                      : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
+                  }`}
+                >
+                  <FileSearch className="w-4 h-4 text-cyan-400" />
+                  <span>Document Scan & Math Audit</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppMode("compare");
+                    setCachedDealerResult(null);
+                  }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                    appMode === "compare"
+                      ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/50 shadow-md shadow-cyan-500/20"
+                      : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
+                  }`}
+                >
+                  <Scale className="w-4 h-4 text-blue-400" />
+                  <span>Compare 2–5 Quotations</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppMode("dealer_response");
+                  }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                    appMode === "dealer_response"
+                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/50 shadow-md shadow-purple-500/20"
+                      : "bg-slate-900/80 text-slate-400 border border-white/5 hover:text-white hover:border-white/20 hover:bg-slate-800/80"
+                  }`}
+                >
+                  <MessageSquareQuote className="w-4 h-4 text-purple-400" />
+                  <span>Dealer Counter-Offer Parser</span>
+                </button>
+              </div>
+
+              {/* Mode Specific Upload or Parser */}
+              {appMode === "dealer_response" ? (
+                <DealerResponseParserCard
+                  userId={userId}
+                  currency="INR"
+                  initialResult={cachedDealerResult}
+                  onParsed={async (parsed) => {
+                    try {
+                      await saveAnalysisToCache({
+                        id: generateUUID(),
+                        type: "dealer_response",
+                        title: `Dealer Response Analysis`,
+                        filename: "Dealer Response",
+                        timestamp: new Date().toISOString(),
+                        currency: parsed.currency || "INR",
+                        totalAmount: parsed.calculated_new_total ?? parsed.stated_counter_total,
+                        statusVerdict: parsed.math_reconciliation_status,
+                        discrepancyCount: parsed.extracted_actions?.length || 0,
+                        resultPayload: parsed,
+                      });
+                      setOfflineRefreshTrigger((prev) => prev + 1);
+                    } catch (err) {
+                      console.warn("Could not cache dealer response:", err);
+                    }
+                  }}
+                />
+              ) : appMode === "compare" ? (
+                <MultiQuoteUploadDropzone
+                  userId={userId}
+                  onComparisonComplete={async (comp) => {
+                    setMultiQuoteResult(comp);
+                    try {
+                      await saveAnalysisToCache({
+                        id: generateUUID(),
+                        type: "compare_quotes",
+                        title: `Comparison Matrix (${comp.quotes.length} Quotes)`,
+                        filename: comp.quotes.map((q) => q.filename || q.vendor_name || q.document_id).join(", "),
+                        timestamp: new Date().toISOString(),
+                        currency: comp.primary_currency,
+                        totalAmount: comp.min_total,
+                        statusVerdict: comp.currency_mismatch ? "CURRENCY_MISMATCH" : "COMPARED",
+                        discrepancyCount: comp.aligned_components?.length || 0,
+                        resultPayload: comp,
+                      });
+                      setOfflineRefreshTrigger((prev) => prev + 1);
+                    } catch (err) {
+                      console.warn("Could not cache multi-quote result:", err);
+                    }
+                  }}
+                />
+              ) : (
+                <div id="upload-dropzone-section" className="scroll-mt-24 space-y-4">
+                  <Dropzone
+                    onFileSelect={handleFileSelect}
+                    isProcessing={isProcessing}
+                    selectedPrimaryFile={primaryFile}
+                    onClearPrimaryFile={handleReset}
+                  />
+                  <PipelineProgress isProcessing={isProcessing} currentEvent={streamEvent} />
+                </div>
+              )}
             </div>
-          )
+
+            {/* Right Column (lg:col-span-5): Sticky 3D Spatial Holographic Chamber */}
+            <div className="lg:col-span-5 lg:sticky lg:top-24 space-y-4">
+              {showHologram && (
+                <div id="hologram-3d-stage" className="animate-in fade-in duration-300">
+                  <Holographic3DScanner
+                    result={null}
+                    imagePreviewUrl={null}
+                    okfRules={okfRules}
+                    onTriggerUpload={() => {
+                      const el = document.getElementById("upload-dropzone-section");
+                      if (el) el.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
 
 

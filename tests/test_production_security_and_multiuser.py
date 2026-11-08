@@ -91,7 +91,9 @@ class TestMultiUserIsolationAndIdor:
         resp_list = test_client.get("/api/v1/documents")
         assert resp_list.status_code == 401
 
-        resp_post = test_client.post("/api/v1/documents", json={"user_id": str(uuid4()), "text_content": "hello"})
+        resp_post = test_client.post(
+            "/api/v1/documents", json={"user_id": str(uuid4()), "text_content": "hello"}
+        )
         assert resp_post.status_code == 401
 
         resp_del = test_client.delete(f"/api/v1/documents/{uuid4()}")
@@ -314,6 +316,7 @@ class TestMultiUserIsolationAndIdor:
     async def test_concurrent_multi_user_access_isolation(self, tmp_path):
         """Concurrent asynchronous multi-user document indexing and retrieval maintains absolute isolation."""
         import anyio
+
         from before_you_pay.models import RagQuery
 
         db_file = str(tmp_path / "concurrent_tenant.db")

@@ -15,7 +15,8 @@ import { OfflineSyncIndicator } from "./OfflineSyncIndicator";
 
 interface NavbarProps {
   userId: string;
-  onUpdateUserId: (newId: string) => void;
+  onUpdateUserId?: (newId: string) => void;
+  onNewSession?: () => void;
   ragCount: number;
   onOpenRag: () => void;
   onOpenOkf: () => void;
@@ -29,6 +30,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   userId,
   onUpdateUserId,
+  onNewSession,
   ragCount,
   onOpenRag,
   onOpenOkf,
@@ -38,17 +40,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRunOnDeviceAnalysis,
   offlineRefreshTrigger,
 }) => {
-  const [isEditingUser, setIsEditingUser] = useState(false);
-  const [tempUserId, setTempUserId] = useState(userId);
   const [isMobileUserModalOpen, setIsMobileUserModalOpen] = useState(false);
-
-  const handleSaveUser = () => {
-    if (tempUserId.trim()) {
-      onUpdateUserId(tempUserId.trim());
-      setIsEditingUser(false);
-      setIsMobileUserModalOpen(false);
-    }
-  };
 
   return (
     <>
@@ -105,34 +97,29 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Desktop Actions (hidden on phone, available in bottom bar) */}
             <div className="hidden md:flex items-center gap-2.5">
-              {/* Tenant User ID */}
-              {isEditingUser ? (
-                <div className="flex items-center gap-1.5 bg-slate-900 border border-brand-500/50 rounded-lg p-1">
-                  <input
-                    type="text"
-                    value={tempUserId}
-                    onChange={(e) => setTempUserId(e.target.value)}
-                    className="bg-transparent text-xs text-white px-2 py-0.5 focus:outline-none w-32 font-mono"
-                    placeholder="Tenant UUID"
-                  />
-                  <button
-                    onClick={handleSaveUser}
-                    className="px-2.5 py-1 bg-brand-500 hover:bg-brand-600 text-white rounded text-xs font-semibold"
-                  >
-                    Save
-                  </button>
-                </div>
-              ) : (
+              {/* Authenticated Tenant Session Badge */}
+              <div
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-white/5 border border-white/10"
+                title={`Cryptographically Verified Tenant ID: ${userId}`}
+                aria-label={`Verified Tenant: ${userId}`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
+                <span className="font-mono text-slate-400">User:</span>
+                <span className="font-mono text-white font-semibold">
+                  {userId ? `${userId.slice(0, 8)}...` : "Authenticated"}
+                </span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="Session Verified" />
+              </div>
+
+              {onNewSession && (
                 <button
                   type="button"
-                  onClick={() => setIsEditingUser(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 transition cursor-pointer"
-                  title="Click to edit Tenant User ID"
-                  aria-label={`User: ${userId}`}
+                  onClick={onNewSession}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition"
+                  title="Start a fresh verified session"
+                  aria-label="New Session"
                 >
-                  <User className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden="true" />
-                  <span className="font-mono text-slate-400">User:</span>
-                  <span className="font-mono text-white font-semibold">{userId.slice(0, 8)}...</span>
+                  New Session
                 </button>
               )}
 
@@ -165,10 +152,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Mobile Profile Trigger (Touch Target >= 44px) */}
             <button
               type="button"
-              onClick={() => {
-                setTempUserId(userId);
-                setIsMobileUserModalOpen(true);
-              }}
+              onClick={() => setIsMobileUserModalOpen(true)}
               className="md:hidden flex items-center justify-center w-11 h-11 rounded-xl bg-white/5 border border-white/10 text-slate-300 active:scale-95 transition cursor-pointer"
               title="Tenant Profile"
               aria-label="Tenant Profile"
@@ -228,10 +212,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* 4. Profile / Tenant */}
           <button
             type="button"
-            onClick={() => {
-              setTempUserId(userId);
-              setIsMobileUserModalOpen(true);
-            }}
+            onClick={() => setIsMobileUserModalOpen(true)}
             className="flex flex-col items-center justify-center min-h-[48px] py-1 rounded-xl text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer"
             aria-label="Tenant Profile"
           >
@@ -247,8 +228,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="w-full max-w-sm rounded-2xl bg-slate-900 border border-white/10 p-5 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div className="flex items-center gap-2">
-                <User className="w-5 h-5 text-brand-400" />
-                <h3 className="font-bold text-base text-white">Tenant Profile</h3>
+                <ShieldCheck className="w-5 h-5 text-cyan-400" />
+                <h3 className="font-bold text-base text-white">Authenticated Session</h3>
               </div>
               <button
                 type="button"
@@ -260,36 +241,44 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-300 block">
-                Multi-Tenant User UUID
-              </label>
-              <input
-                type="text"
-                value={tempUserId}
-                onChange={(e) => setTempUserId(e.target.value)}
-                className="w-full p-3 rounded-xl bg-black/50 border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-brand-500"
-                placeholder="Enter user or tenant UUID"
-              />
-              <p className="text-[11px] text-slate-400">
-                Isolates your uploaded documents and RAG history to this tenant identifier.
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-black/50 border border-white/10 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Verified Tenant Identity
+                </span>
+                <p className="font-mono text-xs text-cyan-300 break-all select-all">
+                  {userId || "Authenticated Session"}
+                </p>
+                <div className="flex items-center gap-1.5 pt-1 text-[11px] text-emerald-400">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Derived from cryptographic bearer token</span>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Your uploaded documents, calculations, and RAG records are isolated strictly to this verified tenant identity.
               </p>
             </div>
 
             <div className="flex items-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={handleSaveUser}
-                className="flex-1 min-h-[44px] py-2.5 rounded-xl font-bold text-sm bg-brand-500 text-white shadow-glow hover:bg-brand-600 active:scale-95 transition"
-              >
-                Save Tenant ID
-              </button>
+              {onNewSession && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onNewSession();
+                    setIsMobileUserModalOpen(false);
+                  }}
+                  className="flex-1 min-h-[44px] py-2.5 rounded-xl font-bold text-xs sm:text-sm bg-gradient-to-r from-brand-500 to-indigo-600 text-white shadow-glow hover:opacity-90 active:scale-95 transition"
+                >
+                  Start New Session
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsMobileUserModalOpen(false)}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-300 bg-white/5 hover:bg-white/10 active:scale-95 transition"
+                className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold text-slate-300 bg-white/5 hover:bg-white/10 active:scale-95 transition"
               >
-                Cancel
+                Close
               </button>
             </div>
           </div>

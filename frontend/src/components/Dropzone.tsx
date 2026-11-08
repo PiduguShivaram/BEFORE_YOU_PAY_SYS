@@ -5,12 +5,11 @@ import {
   UploadCloud,
   Camera,
   FileText,
-  Zap,
   PlusCircle,
   X,
   FileCheck,
   Layers,
-  ArrowRight,
+  AlertCircle,
 } from "lucide-react";
 import { DocumentClassification } from "../lib/types";
 import { CameraCaptureModal } from "./CameraCaptureModal";
@@ -36,7 +35,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [docType, setDocType] = useState<DocumentClassification>("other");
-  const [isLoadingSample, setIsLoadingSample] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [supportingFile, setSupportingFile] = useState<File | null>(null);
   const [stagedPrimaryFile, setStagedPrimaryFile] = useState<File | null>(
     selectedPrimaryFile || null
@@ -46,6 +45,29 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const supportingFileInputRef = useRef<HTMLInputElement>(null);
+
+  const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+  const ALLOWED_EXTENSIONS = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt"];
+
+  const validateFile = (file: File): boolean => {
+    if (file.size > MAX_FILE_SIZE) {
+      setValidationError(`File "${file.name}" exceeds maximum allowed size of 25MB.`);
+      return false;
+    }
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    const mime = file.type.toLowerCase();
+    const isAllowedExt = ALLOWED_EXTENSIONS.some((e) => ext === e);
+    const isAllowedMime =
+      mime.startsWith("image/") || mime === "application/pdf" || mime === "text/plain";
+    if (!isAllowedExt && !isAllowedMime) {
+      setValidationError(
+        `Unsupported format for "${file.name}". Please upload PDF, PNG, JPG, or WEBP.`
+      );
+      return false;
+    }
+    setValidationError(null);
+    return true;
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -66,9 +88,10 @@ export const Dropzone: React.FC<DropzoneProps> = ({
 
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const dropped = e.dataTransfer.files[0];
+      if (!validateFile(dropped)) return;
       if (stagedPrimaryFile && !supportingFile) {
-        // Drop as supporting file
         setSupportingFile(dropped);
+        onFileSelect(stagedPrimaryFile, docType, dropped);
       } else {
         setStagedPrimaryFile(dropped);
         onFileSelect(dropped, docType, supportingFile);
@@ -79,6 +102,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   const handlePrimaryFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      if (!validateFile(file)) return;
       setStagedPrimaryFile(file);
       onFileSelect(file, docType, supportingFile);
     }
@@ -87,6 +111,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   const handleSupportingFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      if (!validateFile(file)) return;
       setSupportingFile(file);
       if (stagedPrimaryFile) {
         onFileSelect(stagedPrimaryFile, docType, file);
@@ -95,26 +120,9 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   };
 
   const handleCameraCapture = (capturedFile: File) => {
+    if (!validateFile(capturedFile)) return;
     setStagedPrimaryFile(capturedFile);
     onFileSelect(capturedFile, docType, supportingFile);
-  };
-
-  const handleLoadSample = async () => {
-    if (isProcessing || isLoadingSample) return;
-    setIsLoadingSample(true);
-    try {
-      const response = await fetch("/sample_handwritten_quotation.jpeg");
-      const blob = await response.blob();
-      const file = new File([blob], "handwritten_vehicle_quotation.jpeg", {
-        type: "image/jpeg",
-      });
-      setStagedPrimaryFile(file);
-      onFileSelect(file, "quotation", supportingFile);
-    } catch {
-      alert("Failed to load sample quotation. Please select an image from your device.");
-    } finally {
-      setIsLoadingSample(false);
-    }
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -233,53 +241,56 @@ export const Dropzone: React.FC<DropzoneProps> = ({
         </div>
       )}
 
-      {/* Mobile-First Primary Actions Grid */}
-      <div className="space-y-3">
-        {/* Primary Action: Camera / Live Scan Document (Touch target >= 52px) */}
+      {/* Validation Error Alert */}
+      {validationError && (
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs animate-in fade-in">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+          <span className="flex-1">{validationError}</span>
+          <button
+            type="button"
+            onClick={() => setValidationError(null)}
+            className="text-rose-400 hover:text-white p-0.5"
+            aria-label="Dismiss error"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Primary Actions Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Primary Action 1: Camera / Live Scan Document (Touch target >= 52px) */}
         <button
           type="button"
           disabled={isProcessing}
           onClick={() => setIsCameraModalOpen(true)}
-          className="w-full min-h-[52px] px-5 py-3 rounded-xl font-bold text-sm sm:text-base bg-brand-500 hover:bg-brand-400 text-white shadow-card active:scale-98 transition flex items-center justify-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+          className="w-full min-h-[52px] px-5 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-400 hover:to-indigo-500 text-white shadow-lg shadow-brand-500/25 active:scale-98 transition flex items-center justify-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
           aria-label="Scan Document with Camera"
         >
           <Camera className="w-5 h-5 text-white shrink-0" />
           <span>Camera / Scan Document</span>
         </button>
 
-        {/* Secondary Mobile Actions: Upload from device & Try Sample */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <button
-            type="button"
-            disabled={isProcessing}
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full min-h-[48px] px-4 py-2.5 rounded-xl font-semibold text-xs sm:text-sm bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 transition active:scale-98 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-            aria-label="Upload Document from Files"
-          >
-            <FileText className="w-4 h-4 text-brand-400 shrink-0" />
-            <span>Upload from Device</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={isProcessing || isLoadingSample}
-            onClick={handleLoadSample}
-            className="w-full min-h-[48px] px-4 py-2.5 rounded-xl font-semibold text-xs sm:text-sm bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/25 transition active:scale-98 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-            aria-label="Try Sample Quotation"
-          >
-            <Zap className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>{isLoadingSample ? "Loading Sample..." : "Try Sample Quotation"}</span>
-          </button>
-        </div>
+        {/* Primary Action 2: Upload from Device */}
+        <button
+          type="button"
+          disabled={isProcessing}
+          onClick={() => fileInputRef.current?.click()}
+          className="w-full min-h-[52px] px-5 py-3 rounded-xl font-bold text-sm bg-slate-900/90 hover:bg-slate-800 text-slate-100 border border-white/15 hover:border-brand-500/50 shadow-md active:scale-98 transition flex items-center justify-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          aria-label="Upload Document from Device"
+        >
+          <FileText className="w-5 h-5 text-brand-400 shrink-0" />
+          <span>Upload from Device</span>
+        </button>
       </div>
 
-      {/* Desktop Drag & Drop Visual Area */}
+      {/* Drag & Drop Visual Area */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => !isProcessing && fileInputRef.current?.click()}
-        className={`relative overflow-hidden rounded-xl border border-dashed p-4 sm:p-7 text-center transition cursor-pointer ${
+        className={`relative overflow-hidden rounded-xl border border-dashed p-4 sm:p-6 text-center transition cursor-pointer ${
           isDragOver
             ? "border-brand-500 bg-brand-500/10"
             : "border-white/15 bg-slate-950/40 hover:border-brand-500/50 hover:bg-slate-900/30"
@@ -289,9 +300,14 @@ export const Dropzone: React.FC<DropzoneProps> = ({
           <div className="absolute left-0 right-0 h-1 bg-gradient-to-r from-transparent via-brand-400 to-transparent shadow-[0_0_15px_#818cf8] animate-scan z-10" />
         )}
 
-        <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
-          <UploadCloud className="w-4 h-4 text-brand-400" />
-          <span>Or drag & drop scan / PDF here (PDF, JPEG, PNG, WEBP — Max 25MB)</span>
+        <div className="flex flex-col items-center justify-center gap-1.5 text-xs text-slate-400">
+          <div className="flex items-center gap-2 text-slate-300 font-medium">
+            <UploadCloud className="w-4 h-4 text-brand-400" />
+            <span>Drop your bill, invoice, or quotation here</span>
+          </div>
+          <span className="text-[11px] text-slate-500">
+            Supported formats: PDF, PNG, JPG, WEBP (Max 25MB)
+          </span>
         </div>
       </div>
 
