@@ -356,6 +356,129 @@ class TestMultiUserIsolationAndIdor:
             for i in range(num_users):
                 tg.start_soon(worker, i)
 
+    def test_anonymous_session_creation_mints_server_controlled_guest_uuid(self, test_client):
+        """POST /auth/session without user_id must generate a new server-controlled UUID."""
+        resp = test_client.post("/api/v1/auth/session", json={})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "access_token" in data
+        assert "user_id" in data
+        assert data["token_type"] == "bearer"
+        assert data["expires_in"] > 0
+
+    def test_identity_impersonation_in_session_creation_rejected_403(self, test_client):
+        """Unauthenticated caller attempting to claim an existing UUID in /auth/session must be rejected with 403."""
+        victim_uuid = uuid4()
+        resp = test_client.post("/api/v1/auth/session", json={"user_id": str(victim_uuid)})
+        assert resp.status_code == 403
+        assert "Identity ownership verification failed" in resp.json()["detail"]
+
+    def test_cross_user_session_claim_rejected_403(self, test_client):
+        """Caller authenticated as User A attempting to mint session for User B must be rejected with 403."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_a = uuid4()
+        user_b = uuid4()
+        token_a = auth.create_access_token(user_a)
+
+        resp = test_client.post(
+            "/api/v1/auth/session",
+            json={"user_id": str(user_b)},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp.status_code == 403
+        assert "Cross-tenant access forbidden" in resp.json()["detail"]
+
+    def test_authenticated_session_refresh_200(self, test_client):
+        """Authenticated caller can renew their session via /auth/refresh or /auth/session."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_a = uuid4()
+        token_a = auth.create_access_token(user_a)
+
+        # Refresh via /auth/refresh
+        resp_refresh = test_client.post(
+            "/api/v1/auth/refresh",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp_refresh.status_code == 200
+        assert resp_refresh.json()["user_id"] == str(user_a)
+
+        # Resume via /auth/session with matching user_id
+        resp_resume = test_client.post(
+            "/api/v1/auth/session",
+            json={"user_id": str(user_a)},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp_resume.status_code == 201
+        assert resp_resume.json()["user_id"] == str(user_a)
+
+    def test_unauthenticated_financial_endpoints_rejected_401(self, test_client):
+        """Financial operations /analyze, /compare-quotes, /parse-dealer-response require verified authentication."""
+        # /analyze without token
+        resp_analyze = test_client.post(
+            "/api/v1/analyze",
+            files={"file": ("quote.txt", b"Quotation text", "text/plain")},
+        )
+        assert resp_analyze.status_code == 401
+
+        # /compare-quotes without token
+        resp_compare = test_client.post(
+            "/api/v1/compare-quotes",
+            files=[
+                ("files", ("q1.txt", b"Quote 1 text", "text/plain")),
+                ("files", ("q2.txt", b"Quote 2 text", "text/plain")),
+            ],
+        )
+        assert resp_compare.status_code == 401
+
+        # /parse-dealer-response without token
+        resp_dealer = test_client.post(
+            "/api/v1/parse-dealer-response",
+            data={"dealer_text": "We offer 10000 discount"},
+        )
+        assert resp_dealer.status_code == 401
+
+    def test_cross_tenant_financial_operations_rejected_403(self, test_client):
+        """Passing mismatched user_id with valid token must be rejected with 403."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
+        user_a = uuid4()
+        user_b = uuid4()
+        token_a = auth.create_access_token(user_a)
+
+        # Mismatched user_id on /analyze
+        resp_analyze = test_client.post(
+            "/api/v1/analyze",
+            files={"file": ("quote.txt", b"Quotation text", "text/plain")},
+            data={"user_id": str(user_b)},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp_analyze.status_code == 403
+
+        # Mismatched user_id on /compare-quotes
+        resp_compare = test_client.post(
+            "/api/v1/compare-quotes",
+            files=[
+                ("files", ("q1.txt", b"Quote 1 text", "text/plain")),
+                ("files", ("q2.txt", b"Quote 2 text", "text/plain")),
+            ],
+            data={"user_id": str(user_b)},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp_compare.status_code == 403
+
+        # Mismatched user_id on /parse-dealer-response
+        resp_dealer = test_client.post(
+            "/api/v1/parse-dealer-response",
+            data={"dealer_text": "We offer 10000 discount", "user_id": str(user_b)},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert resp_dealer.status_code == 403
+
 
 class TestSqlInjectionDefense:
     """Validate immunity against SQL injection payloads."""

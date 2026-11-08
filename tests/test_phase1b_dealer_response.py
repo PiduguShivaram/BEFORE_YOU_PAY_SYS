@@ -195,8 +195,13 @@ class TestPhase1BDealerResponseApiEndpoint:
     """Integration tests for POST /api/v1/parse-dealer-response."""
 
     def test_parse_dealer_response_api(self):
-        client = TestClient(app)
-        user_id = str(uuid4())
+        from before_you_pay.services.auth import AuthService
+
+        user_uuid = uuid4()
+        auth = AuthService()
+        token = auth.create_access_token(user_uuid)
+        client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        user_id = str(user_uuid)
 
         data = {
             "dealer_text": "We will waive handling charges of Rs. 8,500 and give extra discount of Rs. 10,000. Final on-road is Rs. 11,31,500.",

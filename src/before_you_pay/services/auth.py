@@ -166,9 +166,12 @@ class AuthService:
 
         return user_id
 
-    def create_auth_session(self, user_id: UUID | None = None) -> dict[str, Any]:
-        """Generate a verified auth session package with token and metadata."""
-        uid = user_id or uuid4()
+    def create_guest_session(self) -> dict[str, Any]:
+        """Generate a brand-new, server-controlled anonymous guest session with a freshly minted UUID.
+
+        Clients cannot supply their own user_id when creating a guest session.
+        """
+        uid = uuid4()
         token = self.create_access_token(uid)
         return {
             "access_token": token,
@@ -176,3 +179,26 @@ class AuthService:
             "user_id": str(uid),
             "expires_in": self._expire_minutes * 60,
         }
+
+    def resume_or_refresh_session(self, authenticated_user_id: UUID) -> dict[str, Any]:
+        """Re-issue/renew a verified auth session for an already cryptographically validated identity.
+
+        Must only be called after token signature and claims have been verified.
+        """
+        token = self.create_access_token(authenticated_user_id)
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user_id": str(authenticated_user_id),
+            "expires_in": self._expire_minutes * 60,
+        }
+
+    def create_auth_session(self, user_id: UUID | None = None) -> dict[str, Any]:
+        """Backward-compatible session creator.
+
+        If user_id is None, mints a fresh server-controlled guest UUID.
+        If user_id is provided, issues a token for that user_id (caller must ensure authorization).
+        """
+        if user_id is None:
+            return self.create_guest_session()
+        return self.resume_or_refresh_session(user_id)

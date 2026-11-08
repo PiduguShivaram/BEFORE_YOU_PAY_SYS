@@ -14,10 +14,16 @@ export async function getAuthToken(userId?: string): Promise<string> {
     return cachedAuthToken;
   }
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (cachedAuthToken) {
+      headers["Authorization"] = `Bearer ${cachedAuthToken}`;
+    }
+    // Security Rule: Never claim a user_id without presenting authenticating credentials
+    const payload = cachedAuthToken && userId ? { user_id: userId } : {};
     const res = await fetch(`${API_BASE}/api/v1/auth/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(userId ? { user_id: userId } : {}),
+      headers,
+      body: JSON.stringify(payload),
     });
     if (res.ok) {
       const data = await res.json();

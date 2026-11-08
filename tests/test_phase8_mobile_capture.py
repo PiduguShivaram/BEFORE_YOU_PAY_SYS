@@ -164,8 +164,13 @@ class TestPhase8MobileCaptureFlow:
 
     def test_tenant_isolation_in_mobile_workflow(self, client: TestClient) -> None:
         """Verifies User A and User B document retrievals are isolated."""
+        from before_you_pay.services.auth import AuthService
+
+        auth = AuthService()
         user_a = uuid4()
         user_b = uuid4()
+        token_a = auth.create_access_token(user_a)
+        token_b = auth.create_access_token(user_b)
 
         doc_a = b"Confidential Warranty Quote A\nSpecial Discount Code ALPHA: $500\nTotal: $2,000"
         files_a = {"file": ("warranty_a.txt", io.BytesIO(doc_a), "text/plain")}
@@ -173,6 +178,7 @@ class TestPhase8MobileCaptureFlow:
             "/api/v1/analyze",
             data={"user_id": str(user_a), "document_classification": "warranty"},
             files=files_a,
+            headers={"Authorization": f"Bearer {token_a}"},
         )
         assert res_a.status_code == 200
         data_a = res_a.json()
@@ -184,6 +190,7 @@ class TestPhase8MobileCaptureFlow:
             "/api/v1/analyze",
             data={"user_id": str(user_b), "document_classification": "quotation"},
             files=files_b,
+            headers={"Authorization": f"Bearer {token_b}"},
         )
         assert res_b.status_code == 200
         data_b = res_b.json()

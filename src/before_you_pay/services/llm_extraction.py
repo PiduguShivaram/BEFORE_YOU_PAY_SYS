@@ -483,6 +483,32 @@ class HybridLlmExtractionEngine:
                 elif qty > 0 and raw_rate is not None:
                     rate = round(item_tot / qty, 2)
 
+            # Resolve table column shift where discount was misassigned into rate slot
+            # (e.g. rate column printed blank, OCR token 500 discount shifted into rate slot,
+            # while total is 1499 and MRP is 2499 -> intended rate is 1999 = 1499 + 500)
+            if qty > 0 and rate is not None and item_tot > 0:
+                if (rate * qty) < item_tot:
+                    # Rate cannot be less than post-discount item total: token is discount!
+                    disc_val = rate
+                    rate = round((item_tot + disc_val) / qty, 2)
+                else:
+                    calc_ext = (qty * rate) - (disc_val or 0.0)
+                    if abs(calc_ext - item_tot) > 1.0:
+                        if disc_val is not None and disc_val > 0:
+                            intended_from_mrp = (
+                                round(mrp_val - disc_val, 2)
+                                if mrp_val is not None and mrp_val > disc_val
+                                else None
+                            )
+                            intended_from_tot = round((item_tot + disc_val) / qty, 2)
+                            if (
+                                intended_from_mrp is not None
+                                and intended_from_mrp == intended_from_tot
+                            ):
+                                rate = intended_from_mrp
+                            elif rate == disc_val and intended_from_tot > 0:
+                                rate = intended_from_tot
+
             # Reconcile MRP via standard accounting equation if omitted or obstructed in OCR
             if (
                 mrp_val is None

@@ -50,7 +50,7 @@ import { Card3D } from "../components/Card3D";
 import { SpatialCursor3D } from "../components/SpatialCursor3D";
 import { OnDeviceAnalysisCard } from "../components/OnDeviceAnalysisCard";
 import { runOnDeviceOfflineAnalysis } from "../lib/offlineOcrWorker";
-import { OfflineAnalysisResult } from "../lib/offlineAnalysisEngine";
+import { OfflineAnalysisResult, analyzeOfflineText } from "../lib/offlineAnalysisEngine";
 
 export default function Home() {
   const [spatialMode, setSpatialMode] = useState<"antigravity" | "cyber" | "minimal">("antigravity");
@@ -174,6 +174,13 @@ export default function Home() {
       } catch {
         // ignore
       }
+    }
+
+    if (typeof window !== "undefined") {
+      (window as any).__BYP_OFFLINE_ENGINE__ = {
+        analyzeOfflineText,
+        runOnDeviceOfflineAnalysis,
+      };
     }
 
     // Health check probe with periodic polling

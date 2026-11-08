@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from before_you_pay.api.deps import (
+    get_authenticated_user_id,
     get_multi_quote_comparison_service,
-    get_optional_authenticated_user_id,
     get_pipeline_service,
     verify_tenant_boundary,
 )
@@ -24,13 +24,16 @@ router = APIRouter(tags=["Multi-Quote Comparison"])
     summary="N-way multi-quotation comparison (2 to 5 quotations)",
     description=(
         "Simultaneously processes and aligns 2 to 5 quotations/bills, computing component deltas, "
-        "identifying inclusions/exclusions, and generating neutral vendor negotiation questions."
+        "identifying inclusions/exclusions, and generating neutral vendor negotiation questions. "
+        "Requires verified Bearer authentication."
     ),
 )
 async def compare_quotes(
     files: list[UploadFile] = File(..., description="2 to 5 quotation documents (images or PDFs)"),
-    user_id: UUID = Form(..., description="Tenant user ID"),
-    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
+    user_id: UUID | None = Form(
+        default=None, description="Optional tenant user ID (must match verified Bearer token)"
+    ),
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
     comparison_service: MultiQuoteComparisonService = Depends(get_multi_quote_comparison_service),
 ) -> MultiQuoteComparisonResult:

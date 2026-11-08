@@ -232,8 +232,12 @@ class TestPhase1ACompareApiEndpoint:
     """Integration tests for POST /api/v1/compare-quotes."""
 
     def test_compare_quotes_api_multipart(self):
+        from before_you_pay.services.auth import AuthService
+
         client = TestClient(app)
-        user_id = str(uuid4())
+        user_uuid = uuid4()
+        auth = AuthService()
+        token = auth.create_access_token(user_uuid)
 
         quote1_content = b"Vehicle Quotation\nDealer A Motors\nEx-Showroom: Rs. 1000000\nRoad Tax: Rs. 80000\nHandling: Rs. 8500\nTotal: Rs. 1088500\n"
         quote2_content = b"Vehicle Quotation\nDealer B Auto\nEx-Showroom: Rs. 1000000\nRoad Tax: Rs. 80000\nInsurance: Rs. 35000\nTotal: Rs. 1115000\n"
@@ -242,9 +246,14 @@ class TestPhase1ACompareApiEndpoint:
             ("files", ("quote_a.txt", quote1_content, "text/plain")),
             ("files", ("quote_b.txt", quote2_content, "text/plain")),
         ]
-        data = {"user_id": user_id}
+        data = {"user_id": str(user_uuid)}
 
-        response = client.post("/api/v1/compare-quotes", files=files, data=data)
+        response = client.post(
+            "/api/v1/compare-quotes",
+            files=files,
+            data=data,
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert response.status_code == 200
         payload = response.json()
         assert "quotes" in payload

@@ -155,8 +155,14 @@ class SpatialOcrEngine:
         best_result = initial_result
         best_quality = initial_quality
 
-        # If initial result was already from Vision OCR and produced lines, keep best
-        if initial_result.engine_name == "gemini_vision_ocr" and initial_result.pages[0].lines:
+        # If initial result was already from Vision OCR with meaningful financial content and acceptable quality, keep it
+        if (
+            initial_result.engine_name == "gemini_vision_ocr"
+            and initial_result.pages
+            and initial_result.pages[0].lines
+            and self._has_meaningful_financial_content(initial_result)
+            and initial_quality.status in (OCRQualityStatus.GOOD, OCRQualityStatus.MODERATE)
+        ):
             return initial_result
 
         try:
@@ -191,12 +197,16 @@ class SpatialOcrEngine:
                         recovery_pass=2,
                         quality=q2,
                     )
-                    if q2.score > best_quality.score:
+                    if (
+                        q2.score > best_quality.score
+                        or len(res_p2.pages[0].lines) > len(best_result.pages[0].lines)
+                    ):
                         best_result = res_p2
                         best_quality = q2
                     if (
                         q2.status == OCRQualityStatus.GOOD
                         and self._has_meaningful_financial_content(res_p2)
+                        and len(res_p2.pages[0].lines) >= 20
                     ):
                         return best_result
             except Exception:
@@ -228,7 +238,10 @@ class SpatialOcrEngine:
                         recovery_pass=3,
                         quality=q3,
                     )
-                    if q3.score > best_quality.score:
+                    if (
+                        q3.score > best_quality.score
+                        or len(res_p3.pages[0].lines) > len(best_result.pages[0].lines)
+                    ):
                         best_result = res_p3
                         best_quality = q3
             except Exception:
@@ -805,6 +818,7 @@ class SpatialOcrEngine:
 
         settings = get_settings()
 
+        vision_pages = None
         # 1. Production Vision OCR (Primary path when API keys are configured and not in offline mode)
         if not self.is_offline_only and settings.gemini_api_keys:
             try:
@@ -828,9 +842,15 @@ class SpatialOcrEngine:
                     rgb_img.save(buf, format="PNG", optimize=True)
                     send_bytes = buf.getvalue()
 
-                vision_pages = await self._vision_ocr_pass(document_id, send_bytes)
-                if vision_pages and vision_pages[0].lines:
-                    return vision_pages, "gemini_vision_ocr"
+                v_res = await self._vision_ocr_pass(document_id, send_bytes)
+                if (
+                    v_res
+                    and v_res[0].lines
+                    and self._has_meaningful_financial_content_lines(v_res[0].lines)
+                ):
+                    return v_res, "gemini_vision_ocr"
+                elif v_res and v_res[0].lines:
+                    vision_pages = v_res
             except Exception as e:
                 logger.warning("Vision OCR failed, falling back to local OCR: %s", e)
 
@@ -864,10 +884,15 @@ class SpatialOcrEngine:
                         )
                         # Verify winocr extracted coherent financial lines
                         if self._has_meaningful_financial_content_lines(winocr_lines):
-                            lines = winocr_lines
-                            engine_used = "winocr"
+                            if not vision_pages or len(winocr_lines) >= len(vision_pages[0].lines):
+                                lines = winocr_lines
+                                engine_used = "winocr"
             except Exception as e:
                 logger.debug("Local winocr unavailable or failed: %s", e)
+
+        # If local OCR was not chosen but vision candidate exists, use vision_pages
+        if not lines and vision_pages and vision_pages[0].lines:
+            return vision_pages, "gemini_vision_ocr"
 
         # 3. Text payload fallback (for UTF-8 text streams or plain text test uploads, NOT binary images)
         is_binary_image = file_bytes.startswith(

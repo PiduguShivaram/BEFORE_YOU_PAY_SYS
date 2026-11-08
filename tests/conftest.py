@@ -30,15 +30,19 @@ from before_you_pay.models import (
 
 
 @pytest.fixture
-def client() -> TestClient:
-    """Synchronous test client for FastAPI application."""
-    app = create_app()
-    return TestClient(app)
+def sample_user_id() -> UUID:
+    return uuid4()
 
 
 @pytest.fixture
-def sample_user_id() -> UUID:
-    return uuid4()
+def client(sample_user_id: UUID) -> TestClient:
+    """Synchronous test client for FastAPI application with verified default authentication."""
+    from before_you_pay.services.auth import AuthService
+
+    app = create_app()
+    auth = AuthService()
+    token = auth.create_access_token(sample_user_id)
+    return TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 
 @pytest.fixture

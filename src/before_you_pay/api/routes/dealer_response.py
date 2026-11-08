@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from before_you_pay.api.deps import (
+    get_authenticated_user_id,
     get_dealer_response_parser_service,
-    get_optional_authenticated_user_id,
     get_pipeline_service,
     verify_tenant_boundary,
 )
@@ -25,21 +25,23 @@ router = APIRouter(tags=["Dealer Response Parser"])
     description=(
         "Parses unstructured dealer communications (email/WhatsApp/chat), extracting agreed "
         "concessions, waived charges, discounts, and stated counter-offers, and reconciles them "
-        "deterministically against the original quote."
+        "deterministically against the original quote. Requires verified Bearer authentication."
     ),
 )
 async def parse_dealer_response(
     dealer_text: str = Form(
         ..., min_length=2, description="Dealer reply text or email/chat message"
     ),
-    user_id: UUID = Form(..., description="Tenant user ID"),
+    user_id: UUID | None = Form(
+        default=None, description="Optional tenant user ID (must match verified Bearer token)"
+    ),
     original_total: float | None = Form(default=None, description="Original quote total amount"),
     currency: str = Form(default="INR", description="Currency code"),
     quote_file: UploadFile | None = File(
         default=None,
         description="Optional original quote scan or PDF for itemized component context",
     ),
-    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
     parser_service: DealerResponseParserService = Depends(get_dealer_response_parser_service),
 ) -> DealerResponseAnalysisResult:

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 
 from before_you_pay.api.deps import (
-    get_optional_authenticated_user_id,
+    get_authenticated_user_id,
     get_pipeline_service,
     verify_tenant_boundary,
 )
@@ -22,7 +22,7 @@ router = APIRouter(tags=["Analysis"])
     "/analyze",
     response_model=FinalDecisionSupportResult,
     summary="End-to-end document scan analysis",
-    description="Full 7-stage execution: Precondition -> OCR -> Extract -> RAG -> OKF -> Reason -> Validate -> Result.",
+    description="Full 7-stage execution: Precondition -> OCR -> Extract -> RAG -> OKF -> Reason -> Validate -> Result. Requires verified Bearer authentication.",
 )
 async def analyze_document(
     file: UploadFile = File(..., description="Document scan image or PDF"),
@@ -30,12 +30,14 @@ async def analyze_document(
         default=None,
         description="Optional supporting document scan image or PDF (warranty, insurance, past quote)",
     ),
-    user_id: UUID = Form(..., description="Tenant user ID"),
+    user_id: UUID | None = Form(
+        default=None, description="Optional tenant user ID (must match verified Bearer token)"
+    ),
     document_classification: DocumentClassification = Form(
         default=DocumentClassification.OTHER,
         description="Optional document type hint",
     ),
-    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
 ) -> FinalDecisionSupportResult:
     """Execute full 7-stage analysis pipeline on uploaded file."""
@@ -63,7 +65,7 @@ async def analyze_document(
 @router.post(
     "/analyze/stream",
     summary="Progressive SSE streaming document scan analysis",
-    description="Real-time Server-Sent Events updating frontend progress stage-by-stage.",
+    description="Real-time Server-Sent Events updating frontend progress stage-by-stage. Requires verified Bearer authentication.",
 )
 async def analyze_document_stream(
     file: UploadFile = File(..., description="Document scan image or PDF"),
@@ -71,12 +73,14 @@ async def analyze_document_stream(
         default=None,
         description="Optional supporting document scan image or PDF (warranty, insurance, past quote)",
     ),
-    user_id: UUID = Form(..., description="Tenant user ID"),
+    user_id: UUID | None = Form(
+        default=None, description="Optional tenant user ID (must match verified Bearer token)"
+    ),
     document_classification: DocumentClassification = Form(
         default=DocumentClassification.OTHER,
         description="Optional document type hint",
     ),
-    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
     pipeline: PipelineService = Depends(get_pipeline_service),
 ) -> StreamingResponse:
     """Execute 7-stage pipeline streaming live SSE events to frontend."""

@@ -1,11 +1,15 @@
 """Authentication endpoints for session creation and token issuance."""
 
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from before_you_pay.api.deps import get_auth_service, get_authenticated_user_id
+from before_you_pay.api.deps import (
+    get_auth_service,
+    get_authenticated_user_id,
+    get_optional_authenticated_user_id,
+)
 from before_you_pay.services.auth import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -16,7 +20,7 @@ class SessionRequest(BaseModel):
 
     user_id: UUID | None = Field(
         default=None,
-        description="Optional existing tenant UUID to authenticate. If omitted, a fresh UUID is generated.",
+        description="Optional existing tenant UUID to resume. Caller MUST present valid authentication for this identity.",
     )
 
 
@@ -41,15 +45,54 @@ class UserProfileResponse(BaseModel):
     response_model=SessionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create or resume authenticated tenant session",
-    description="Issues a cryptographically signed HMAC-SHA256 access token for the tenant user ID.",
+    description="Issues a cryptographically signed HMAC-SHA256 access token. Caller-supplied user IDs without ownership proof are strictly rejected.",
 )
 async def create_session(
     request: SessionRequest | None = None,
+    authenticated_user_id: UUID | None = Depends(get_optional_authenticated_user_id),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> SessionResponse:
     """Issue signed bearer token for authenticated tenant operations."""
-    target_uid = request.user_id if request and request.user_id else uuid4()
-    session = auth_service.create_auth_session(user_id=target_uid)
+    # Priority 0 Security Invariant: Never create a token for a caller-supplied existing identity without independent proof of ownership.
+    if request and request.user_id is not None:
+        if authenticated_user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Identity ownership verification failed: cannot claim an existing identity without valid proof of ownership.",
+            )
+        if authenticated_user_id != request.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant access forbidden: authenticated credentials do not match requested identity.",
+            )
+        session = auth_service.resume_or_refresh_session(authenticated_user_id)
+    elif authenticated_user_id is not None:
+        # Re-authenticate / extend session for the verified identity
+        session = auth_service.resume_or_refresh_session(authenticated_user_id)
+    else:
+        # Generate a new server-controlled guest identity
+        session = auth_service.create_guest_session()
+
+    return SessionResponse(
+        access_token=session["access_token"],
+        token_type=session["token_type"],
+        user_id=UUID(session["user_id"]),
+        expires_in=session["expires_in"],
+    )
+
+
+@router.post(
+    "/refresh",
+    response_model=SessionResponse,
+    summary="Renew verified tenant session token",
+    description="Re-issues a freshly signed access token for the authenticated caller.",
+)
+async def refresh_session(
+    authenticated_user_id: UUID = Depends(get_authenticated_user_id),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> SessionResponse:
+    """Re-issue access token for verified caller."""
+    session = auth_service.resume_or_refresh_session(authenticated_user_id)
     return SessionResponse(
         access_token=session["access_token"],
         token_type=session["token_type"],

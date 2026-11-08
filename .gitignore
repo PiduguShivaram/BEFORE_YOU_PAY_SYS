@@ -26,6 +26,8 @@ htmlcov/
 
 # Runtime data
 data/uploads/
+data/*.db
+data/user_documents.db*
 scratch/
 
 # Vercel

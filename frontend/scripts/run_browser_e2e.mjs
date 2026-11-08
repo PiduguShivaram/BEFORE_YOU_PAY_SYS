@@ -294,9 +294,11 @@ async function runBrowserE2E() {
     await page.close();
   } finally {
     await browser.close();
-    if (serverProcess) {
+    if (serverProcess && serverProcess.pid) {
       console.log("Stopping Next.js test server...");
-      serverProcess.kill();
+      try {
+        spawn("taskkill", ["/F", "/T", "/PID", String(serverProcess.pid)]);
+      } catch {}
     }
   }
 
@@ -309,6 +311,7 @@ async function runBrowserE2E() {
     process.exit(1);
   } else {
     console.log("All browser E2E tests PASSED successfully!");
+    process.exit(0);
   }
 }
 

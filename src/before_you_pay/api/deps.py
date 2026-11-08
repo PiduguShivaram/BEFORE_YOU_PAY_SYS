@@ -101,21 +101,27 @@ async def get_optional_authenticated_user_id(
 
 def verify_tenant_boundary(
     authenticated_user_id: UUID | None,
-    requested_user_id: UUID | None,
+    requested_user_id: UUID | None = None,
 ) -> UUID:
-    """Ensure client cannot specify a user_id different from the authenticated token."""
-    if authenticated_user_id is not None and requested_user_id is not None:
-        if authenticated_user_id != requested_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cross-tenant access forbidden: provided user ID does not match authenticated token.",
-            )
-        return authenticated_user_id
-    if authenticated_user_id is not None:
-        return authenticated_user_id
-    if requested_user_id is not None:
-        return requested_user_id
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Tenant user ID must be provided.",
-    )
+    """Ensure client cannot specify a user_id different from the authenticated token.
+
+    Security invariants:
+    1. Authenticated user ID is MANDATORY. Never falls back to caller-supplied unauthenticated UUID.
+    2. If caller provides a requested_user_id, it MUST match authenticated_user_id exactly.
+    3. Cross-tenant access attempts are rejected with HTTP 403 Forbidden.
+    4. Unauthenticated access attempts are rejected with HTTP 401 Unauthorized.
+    """
+    if authenticated_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required: verified Bearer session token is missing.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if requested_user_id is not None and requested_user_id != authenticated_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-tenant access forbidden: provided user ID does not match authenticated token.",
+        )
+
+    return authenticated_user_id

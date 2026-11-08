@@ -48,35 +48,54 @@ async def test_zetran_bill_regression():
     if doc.due_date is not None:
         assert doc.due_date.normalized_value in ["2020-07-11", "2020-11-07"]
 
-    # Line items: Exactly 3
+    # Line items: Exactly 3 itemized products
     assert len(doc.line_items) == 3
     items = {li.description.normalized_value: li for li in doc.line_items}
 
+    # Item 1: Samsung A30
     assert "Samsung A30" in items
     a30 = items["Samsung A30"]
+    assert a30.quantity is not None and float(a30.quantity.normalized_value) == 1.0
     assert a30.mrp is not None and float(a30.mrp.normalized_value) == 17999.0
     assert a30.unit_price is not None and float(a30.unit_price.normalized_value) == 16999.0
     assert a30.discount is not None and float(a30.discount.normalized_value) == 1000.0
-    assert float(a30.total_price.normalized_value) == 15999.0
+    assert a30.total_price is not None and float(a30.total_price.normalized_value) == 15999.0
+    # Independent line extension audit: Qty * Rate - Discount == Line Total
+    a30_calc_total = float(a30.quantity.normalized_value) * float(
+        a30.unit_price.normalized_value
+    ) - float(a30.discount.normalized_value)
+    assert a30_calc_total == float(a30.total_price.normalized_value)
 
+    # Item 2: Samsung Buds
     assert "Samsung Buds" in items
     buds = items["Samsung Buds"]
+    assert buds.quantity is not None and float(buds.quantity.normalized_value) == 1.0
     assert buds.mrp is not None and float(buds.mrp.normalized_value) == 12999.0
     assert buds.unit_price is not None and float(buds.unit_price.normalized_value) == 12499.0
     assert buds.discount is not None and float(buds.discount.normalized_value) == 500.0
-    assert float(buds.total_price.normalized_value) == 11999.0
+    assert buds.total_price is not None and float(buds.total_price.normalized_value) == 11999.0
+    buds_calc_total = float(buds.quantity.normalized_value) * float(
+        buds.unit_price.normalized_value
+    ) - float(buds.discount.normalized_value)
+    assert buds_calc_total == float(buds.total_price.normalized_value)
 
+    # Item 3: Boat Rockers 510
+    # Physical document column structure audit:
+    # Rate column printed blank in physical document; token 500.0 is the discount (20% of MRP).
+    # Intended unit price is strictly 1999.0 (Amount 1499.0 + Discount 500.0 == 1999.0).
     assert "Boat Rockers 510" in items
     boat = items["Boat Rockers 510"]
+    assert boat.quantity is not None and float(boat.quantity.normalized_value) == 1.0
     assert boat.mrp is not None and float(boat.mrp.normalized_value) == 2499.0
-    assert boat.unit_price is not None and float(boat.unit_price.normalized_value) in [
-        500.0,
-        1999.0,
-    ]
+    assert boat.unit_price is not None and float(boat.unit_price.normalized_value) == 1999.0
     assert boat.discount is not None and float(boat.discount.normalized_value) == 500.0
-    assert float(boat.total_price.normalized_value) == 1499.0
+    assert boat.total_price is not None and float(boat.total_price.normalized_value) == 1499.0
+    boat_calc_total = float(boat.quantity.normalized_value) * float(
+        boat.unit_price.normalized_value
+    ) - float(boat.discount.normalized_value)
+    assert boat_calc_total == float(boat.total_price.normalized_value)
 
-    # Financial totals
+    # Invoice-wide financial reconciliation
     assert doc.subtotal is not None
     assert float(doc.subtotal.normalized_value) == 29497.0
     assert doc.tax_amount is not None
@@ -88,23 +107,36 @@ async def test_zetran_bill_regression():
     assert doc.discount_amount is not None
     assert float(doc.discount_amount.normalized_value) == 2000.0
 
-    # 3. Deterministic Validation checks
-    failed_checks = [c for c in result.validation_checks if c.status == ValidationStatus.FAIL]
-    assert len(failed_checks) in [0, 1]
-    if failed_checks:
-        assert failed_checks[0].check_code == "LINE_ITEM_EXTENSION_MATCH"
+    # Strict independent invoice arithmetic checks:
+    # 1. Sum of line totals equals stated subtotal
+    items_sum = (
+        float(a30.total_price.normalized_value)
+        + float(buds.total_price.normalized_value)
+        + float(boat.total_price.normalized_value)
+    )
+    assert items_sum == float(doc.subtotal.normalized_value) == 29497.0
 
-    # Line Item Sum, Total, Tax must PASS
+    # 2. Sum of line discounts equals total invoice discount
+    discounts_sum = (
+        float(a30.discount.normalized_value)
+        + float(buds.discount.normalized_value)
+        + float(boat.discount.normalized_value)
+    )
+    assert discounts_sum == float(doc.discount_amount.normalized_value) == 2000.0
+
+    # 3. Subtotal + Shipping + Tax equals grand total
+    grand_calc = (
+        float(doc.subtotal.normalized_value)
+        + float(doc.shipping_amount.normalized_value)
+        + float(doc.tax_amount.normalized_value)
+    )
+    assert grand_calc == float(doc.total_amount.normalized_value) == 29996.0
+
+    # 3. Deterministic Validation checks
     checks_by_code = {c.check_code: c for c in result.validation_checks}
     assert checks_by_code["ARITHMETIC_LINE_ITEMS_SUM"].status == ValidationStatus.PASS
     assert checks_by_code["ARITHMETIC_TOTAL_CONSISTENCY"].status == ValidationStatus.PASS
     assert checks_by_code["ARITHMETIC_TAX_MATCH"].status == ValidationStatus.PASS
+    assert checks_by_code["LINE_ITEM_EXTENSION_MATCH"].status == ValidationStatus.PASS
     if "DATE_SEQUENCE_CHECK" in checks_by_code:
         assert checks_by_code["DATE_SEQUENCE_CHECK"].status == ValidationStatus.PASS
-
-    # 4. Questions: Targeted question if any check requires verification
-    if len(result.smart_questions) > 0:
-        assert (
-            "Boat Rockers 510" in result.smart_questions[0].question
-            or len(result.smart_questions) >= 1
-        )
